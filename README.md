@@ -9,7 +9,8 @@ costs money is off by default and documented below.
 terraform/
 ├── modules/dynamodb-table/   # reusable, validated DynamoDB table module
 ├── modules/lambda-function/  # reusable Lambda + least-privilege IAM role + log group
-├── modules/rest-api/         # reusable REST API: Lambda proxy routes, validation, throttling
+├── modules/rest-api/         # reusable REST API: Lambda proxy routes, validation, throttling, Cognito authorizer
+├── modules/cognito-user-pool/ # reusable Cognito user pool + public app client
 └── environments/dev/         # root config: provider, tags, Orders table, save-order function, orders API
 src/save-order/               # Node.js Lambda code and unit tests
 ```
@@ -71,27 +72,60 @@ aws lambda invoke --function-name save-order \
 |---|---|
 | Type | API Gateway REST API, regional endpoint, stage `dev` |
 | Integration | Lambda proxy integration to `save-order` (only this API/stage/method may invoke it) |
-| Authorization | **`AWS_IAM`**: requests must be SigV4-signed. The module rejects `NONE`. Cognito replaces this in a later step. |
+| Authorization | **Cognito user pool authorizer** (`COGNITO_USER_POOLS`): requests need a valid ID token in the `Authorization` header. The module rejects `NONE`; `AWS_IAM` is also supported. |
 | Request validation | JSON Schema model (`terraform/environments/dev/models/create-order.json`) rejects bad bodies before the Lambda runs. The Lambda validates again (defense in depth); keep the two in sync. |
 | Throttling | 5 requests/second, burst 10, stage-wide |
 | Not enabled | Access logs (needs an account-wide CloudWatch role), WAF, caching, CORS, custom domain, X-Ray |
 
 Cost: REST API requests are about $3.50 per million. There is no charge while idle.
 
-Call it after apply (SigV4 with your SSO credentials):
+## Cognito user pool
+
+| Setting | Value |
+|---|---|
+| Tier | `LITE`: 10,000 monthly active users free, permanently. `PLUS` is rejected (no free tier). |
+| Sign-up | Admin-created users only (no self sign-up) |
+| Sign-in | Email address; strong password policy (12+ characters, upper, lower, number, symbol) |
+| MFA | Optional, app-based TOTP only (free). SMS MFA is billed and not configured. |
+| App client | Public (no secret), `USER_PASSWORD_AUTH` for CLI testing; user-existence errors hidden; token revocation on |
+| Tokens | ID and access tokens 60 min, refresh token 7 days |
+| Deletion protection | On. Set `deletion_protection_enabled = false` and apply before `terraform destroy`. |
+
+Terraform does not create users, so no password ever lands in state. Create a test user:
 
 ```bash
-URL=$(terraform -chdir=terraform/environments/dev output -raw create_order_url)
-eval "$(aws configure export-credentials --format env)"
-curl -sS -X POST "$URL" \
-  --aws-sigv4 "aws:amz:us-east-1:execute-api" \
-  --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" \
-  -H "x-amz-security-token: $AWS_SESSION_TOKEN" \
-  -H "Content-Type: application/json" \
+cd terraform/environments/dev
+POOL=$(terraform output -raw user_pool_id)
+CLIENT=$(terraform output -raw user_pool_client_id)
+EMAIL=you@example.com
+
+aws cognito-idp admin-create-user --user-pool-id "$POOL" --username "$EMAIL" \
+  --user-attributes Name=email,Value="$EMAIL" Name=email_verified,Value=true \
+  --message-action SUPPRESS
+
+read -rsp "New password: " PW; echo
+aws cognito-idp admin-set-user-password --user-pool-id "$POOL" --username "$EMAIL" \
+  --password "$PW" --permanent
+```
+
+Sign in, then call the API with the **ID token**:
+
+```bash
+ID_TOKEN=$(aws cognito-idp initiate-auth --client-id "$CLIENT" \
+  --auth-flow USER_PASSWORD_AUTH \
+  --auth-parameters USERNAME="$EMAIL",PASSWORD="$PW" \
+  --query AuthenticationResult.IdToken --output text)
+
+curl -sS -X POST "$(terraform output -raw create_order_url)" \
+  -H "Authorization: $ID_TOKEN" -H "Content-Type: application/json" \
   -d '{"orderId":"o-1001","itemId":"i-1","quantity":2,"price":9.99}'
 ```
 
-An unsigned request returns `403 Missing Authentication Token`.
+Without a valid token the API returns `401 Unauthorized`. Remove the test user when done:
+
+```bash
+aws cognito-idp admin-delete-user --user-pool-id "$POOL" --username "$EMAIL"
+```
 
 Unit tests need no dependencies (Node 22+):
 
@@ -119,5 +153,6 @@ with encryption and versioning.
 
 - `enable_point_in_time_recovery` — continuous backups, billed per GB.
 - Customer-managed KMS key — monthly fee per key (not implemented).
+- Cognito PLUS tier, SMS MFA, SES email — billed; not configured.
 - X-Ray tracing, dead-letter queue, CloudWatch alarms, VPC attachment (NAT gateway) — not enabled.
 - AWS WAF (monthly fee for the web ACL and rule), API caching (hourly), access logs, custom domain — not enabled.

@@ -42,6 +42,18 @@ resource "aws_api_gateway_model" "this" {
   schema       = each.value.request_schema
 }
 
+# Validates the Cognito ID token sent in the Authorization header. Rejected requests
+# never reach the Lambda, so unauthenticated calls cost nothing beyond the API request.
+resource "aws_api_gateway_authorizer" "cognito" {
+  count = length(var.cognito_user_pool_arns) > 0 ? 1 : 0
+
+  name            = "${var.name}-cognito"
+  rest_api_id     = aws_api_gateway_rest_api.this.id
+  type            = "COGNITO_USER_POOLS"
+  provider_arns   = var.cognito_user_pool_arns
+  identity_source = "method.request.header.Authorization"
+}
+
 resource "aws_api_gateway_method" "this" {
   for_each = var.routes
 
@@ -49,6 +61,7 @@ resource "aws_api_gateway_method" "this" {
   resource_id   = aws_api_gateway_resource.this[each.value.path_part].id
   http_method   = each.value.http_method
   authorization = each.value.authorization_type
+  authorizer_id = each.value.authorization_type == "COGNITO_USER_POOLS" ? aws_api_gateway_authorizer.cognito[0].id : null
 
   request_validator_id = each.value.request_schema != null ? aws_api_gateway_request_validator.body[0].id : null
   request_models       = each.value.request_schema != null ? { "application/json" = aws_api_gateway_model.this[each.key].name } : {}
@@ -81,11 +94,11 @@ resource "aws_lambda_permission" "this" {
 resource "aws_api_gateway_deployment" "this" {
   rest_api_id = aws_api_gateway_rest_api.this.id
 
-  # Redeploy whenever the route definitions change. Hashing the module inputs (known at
+  # Redeploy whenever the routes or authorizer change. Hashing the module inputs (known at
   # plan time) instead of whole resource objects avoids a spurious redeploy after the
   # first apply, when provider-filled defaults change the objects.
   triggers = {
-    redeployment = sha1(jsonencode(var.routes))
+    redeployment = sha1(jsonencode([var.routes, var.cognito_user_pool_arns]))
   }
 
   lifecycle {

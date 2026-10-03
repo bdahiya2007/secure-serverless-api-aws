@@ -24,7 +24,8 @@ variable "routes" {
   description = <<-EOT
     Routes backed by Lambda proxy integrations, keyed by an alphanumeric name (used as the
     request model name). Each route is one path segment under the API root plus an HTTP method.
-    authorization_type must not be NONE. Only AWS_IAM is supported until an authorizer is added.
+    authorization_type must be AWS_IAM or COGNITO_USER_POOLS; NONE is rejected. COGNITO_USER_POOLS
+    needs cognito_user_pool_arns.
     request_schema is an optional JSON Schema (draft 4) that API Gateway validates before invoking the Lambda.
   EOT
   type = map(object({
@@ -42,14 +43,25 @@ variable "routes" {
   }
 
   validation {
-    condition     = alltrue([for r in values(var.routes) : r.authorization_type == "AWS_IAM"])
-    error_message = "authorization_type must be AWS_IAM. NONE is rejected on purpose; other authorizers are not implemented yet."
+    condition     = alltrue([for r in values(var.routes) : contains(["AWS_IAM", "COGNITO_USER_POOLS"], r.authorization_type)])
+    error_message = "authorization_type must be AWS_IAM or COGNITO_USER_POOLS. NONE is rejected on purpose."
+  }
+
+  validation {
+    condition     = !anytrue([for r in values(var.routes) : r.authorization_type == "COGNITO_USER_POOLS"]) || length(var.cognito_user_pool_arns) > 0
+    error_message = "Routes using COGNITO_USER_POOLS need at least one ARN in cognito_user_pool_arns."
   }
 
   validation {
     condition     = alltrue([for r in values(var.routes) : contains(["GET", "POST", "PUT", "PATCH", "DELETE"], r.http_method)])
     error_message = "http_method must be one of GET, POST, PUT, PATCH, DELETE."
   }
+}
+
+variable "cognito_user_pool_arns" {
+  description = "User pool ARNs for the Cognito authorizer. The authorizer is created only when this is non-empty."
+  type        = list(string)
+  default     = []
 }
 
 variable "throttling_rate_limit" {
