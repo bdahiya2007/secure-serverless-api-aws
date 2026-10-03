@@ -11,6 +11,7 @@ terraform/
 ├── modules/lambda-function/  # reusable Lambda + least-privilege IAM role + log group
 ├── modules/rest-api/         # reusable REST API: Lambda proxy routes, validation, throttling, Cognito authorizer
 ├── modules/cognito-user-pool/ # reusable Cognito user pool + public app client
+├── modules/waf-rate-limit/   # optional AWS WAF per-IP rate limit (billed; off by default)
 └── environments/dev/         # root config: provider, tags, Orders table, save-order function, orders API
 src/save-order/               # Node.js Lambda code and unit tests
 ```
@@ -75,9 +76,36 @@ aws lambda invoke --function-name save-order \
 | Authorization | **Cognito user pool authorizer** (`COGNITO_USER_POOLS`): requests need a valid ID token in the `Authorization` header. The module rejects `NONE`; `AWS_IAM` is also supported. |
 | Request validation | JSON Schema model (`terraform/environments/dev/models/create-order.json`) rejects bad bodies before the Lambda runs. The Lambda validates again (defense in depth); keep the two in sync. |
 | Throttling | 5 requests/second, burst 10, stage-wide |
-| Not enabled | Access logs (needs an account-wide CloudWatch role), WAF, caching, CORS, custom domain, X-Ray |
+| Not enabled | Access logs (needs an account-wide CloudWatch role), caching, CORS, custom domain, X-Ray. WAF is available but **off by default** (see below). |
 
 Cost: REST API requests are about $3.50 per million. There is no charge while idle.
+
+## WAF rate limit (optional, billed, OFF by default)
+
+A WAF web ACL with one rate-based rule blocks any IP that sends more than 100 requests in 5 minutes
+(HTTP 403). It is evaluated before API Gateway, so blocked requests never reach the authorizer or Lambda.
+API Gateway's own throttle (5 req/s, burst 10) is stage-wide; this rule is per IP.
+
+**Cost:** $5.00 per web ACL + $1.00 per rule per month, **prorated hourly and billed even when idle**,
+plus $0.60 per million requests. No free tier. One ACL with one rule is about $6 per month, or about
+$0.008 per hour, which exceeds the $5 budget if left on. Only enable it to demonstrate.
+
+```bash
+cd terraform/environments/dev
+terraform apply -var enable_waf=true     # create (billing starts)
+terraform apply                           # remove: re-apply WITHOUT the variable
+terraform output waf_enabled              # check it is false when you are done
+```
+
+Demonstrate the block (no credentials needed; WAF runs before the authorizer). Expect 401/429 at first,
+then 403 once the limit is exceeded (WAF enforcement can lag by about a minute):
+
+```bash
+URL=$(terraform output -raw create_order_url)
+for i in $(seq 1 250); do curl -s -o /dev/null -w "%{http_code}\n" -X POST "$URL" -d '{}'; done | sort | uniq -c
+```
+
+Not enabled (each costs extra): WAF logging, managed rule groups, Bot Control, CAPTCHA.
 
 ## Cognito user pool
 
@@ -154,5 +182,6 @@ with encryption and versioning.
 - `enable_point_in_time_recovery` — continuous backups, billed per GB.
 - Customer-managed KMS key — monthly fee per key (not implemented).
 - Cognito PLUS tier, SMS MFA, SES email — billed; not configured.
+- WAF (`enable_waf`) — about $6/month while attached; off by default.
 - X-Ray tracing, dead-letter queue, CloudWatch alarms, VPC attachment (NAT gateway) — not enabled.
 - AWS WAF (monthly fee for the web ACL and rule), API caching (hourly), access logs, custom domain — not enabled.

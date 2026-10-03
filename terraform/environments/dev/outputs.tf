@@ -32,3 +32,13 @@ output "user_pool_client_id" {
   description = "Cognito app client ID, used to sign in."
   value       = module.orders_user_pool.client_id
 }
+
+output "waf_enabled" {
+  description = "Whether the (billed) WAF rate limit is attached to the API."
+  value       = var.enable_waf
+}
+
+output "waf_web_acl_arn" {
+  description = "ARN of the WAF web ACL, or null when WAF is disabled."
+  value       = try(module.orders_api_waf[0].web_acl_arn, null)
+}
