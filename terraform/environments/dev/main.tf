@@ -64,3 +64,13 @@ module "orders_api" {
     }
   }
 }
+
+# Optional and OFF by default: a web ACL is billed hourly even when idle (about $6/month).
+module "orders_api_waf" {
+  count  = var.enable_waf ? 1 : 0
+  source = "../../modules/waf-rate-limit"
+
+  name         = "orders-api-waf"
+  resource_arn = module.orders_api.stage_arn
+  rate_limit   = var.waf_rate_limit
+}

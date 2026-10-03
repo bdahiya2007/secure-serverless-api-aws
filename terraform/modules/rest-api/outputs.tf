@@ -17,3 +17,8 @@ output "stage_name" {
   description = "Deployed stage name."
   value       = aws_api_gateway_stage.this.stage_name
 }
+
+output "stage_arn" {
+  description = "ARN of the stage, for associating a WAF web ACL."
+  value       = aws_api_gateway_stage.this.arn
+}
