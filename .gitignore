@@ -44,3 +44,6 @@ Thumbs.db
 
 # --- Logs / temp output ---
 *.log
+
+# --- Terraform Lambda build output ---
+.build/
