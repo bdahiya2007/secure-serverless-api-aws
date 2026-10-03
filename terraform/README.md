@@ -195,7 +195,14 @@ node --test src/save-order/
 `PowerUserAccess` cannot manage IAM, but Terraform must create the Lambda execution role and, once, the
 bootstrap resources. Add [docs/permission-set-inline-policy.json](../docs/permission-set-inline-policy.json) as an
 inline policy on the permission set (IAM Identity Center -> Permission sets -> PowerUserAccess -> Inline
-policy), reprovision the account, and run `aws sso login` again. It only allows IAM on `save-order-*` and
+policy), reprovision the account, and run `aws sso login` again. The file uses `ACCOUNT_ID` as a placeholder so
+the account ID is not published; print a ready-to-paste copy with:
+
+```bash
+sed "s/ACCOUNT_ID/$(aws sts get-caller-identity --query Account --output text)/" docs/permission-set-inline-policy.json
+```
+
+ It only allows IAM on `save-order-*` and
 `serverless-api-pipeline-*` roles and the pipeline boundary policy.
 
 ## CI/CD (GitHub Actions)
@@ -206,6 +213,10 @@ policy), reprovision the account, and run `aws sso login` again. It only allows 
 | `deploy.yml` | Push to `main` (changes under `terraform/environments`, `terraform/modules`, `src`) or manual run | OIDC role | **plan**, then **apply behind the `production` environment (manual approval)** of exactly that saved plan. |
 
 - **No stored AWS keys.** The workflow assumes `AWS_DEPLOY_ROLE_ARN` through GitHub OIDC (short-lived tokens).
+  Two repository secrets are needed: `AWS_DEPLOY_ROLE_ARN` and `TF_STATE_BUCKET` (the bucket name contains the
+  AWS account ID, so it is passed with `-backend-config` and never committed).
+- **The job summary is redacted.** The plan job lists only the action and resource address of each change, never
+  ARNs or IDs, because the repository is public. The full plan is in the step log, where the AWS account ID is masked.
   The role's trust policy checks this repo by immutable owner/repo ID and allows only the `main` branch (plan)
   and the `production` environment (apply). Pull requests cannot assume it.
 - **Packaging is Terraform.** `archive_file` zips `src/save-order`; `apply` updates the Lambda when the code hash
@@ -236,14 +247,18 @@ terraform init && terraform plan
 terraform apply
 
 # 3. Move the dev state into the bucket, then attach the boundary to the Lambda role
+#    (the bucket name is not committed; it is read from the bootstrap output)
 cd ../environments/dev
-terraform init -migrate-state            # answer "yes" to copy local state to S3
+terraform init -migrate-state \
+  -backend-config="bucket=$(terraform -chdir=../../bootstrap output -raw state_bucket)"   # answer "yes"
 terraform plan                           # expect: save-order-role updated in place (boundary)
 terraform apply
 
-# 4. Give GitHub the role ARN (not a secret, but kept as one like the three-tier repo)
+# 4. Give GitHub the role ARN and the state bucket name (both kept as secrets)
 gh secret set AWS_DEPLOY_ROLE_ARN -R bdahiya2007/secure-serverless-api-aws \
   --body "$(terraform -chdir=../../bootstrap output -raw deploy_role_arn)"
+gh secret set TF_STATE_BUCKET -R bdahiya2007/secure-serverless-api-aws \
+  --body "$(terraform -chdir=../../bootstrap output -raw state_bucket)"
 ```
 
 After the PR that adds `validate.yml` is merged, add its job name as a required status check on `main`:
@@ -261,17 +276,19 @@ reviewer. Differences: Actions SHA pinning is required, and workflows cannot app
 
 ```bash
 cd terraform/environments/dev
-terraform init
+terraform init -backend-config="bucket=$(terraform -chdir=../../bootstrap output -raw state_bucket)"
 terraform plan
 terraform apply   # creates real resources; Lambda and on-demand DynamoDB cost nothing while idle
-# State is remote (S3): run the one-time CI/CD setup above before the first init on a new machine.
+# State is remote (S3): complete the one-time CI/CD setup above before the first init on a new machine.
+# After pulling the commit that made the bucket name a -backend-config value, re-run init with -reconfigure.
 ```
 
 To destroy, first set `deletion_protection_enabled = false` in `environments/dev/main.tf` and apply.
 
 ## State
 
-Remote state in the S3 bucket created by `terraform/bootstrap` (key `dev/terraform.tfstate`): private, versioned,
+Remote state in the S3 bucket created by `terraform/bootstrap` (key `dev/terraform.tfstate`; the bucket name is
+supplied with `-backend-config` and not committed, since it contains the AWS account ID): private, versioned,
 SSE-S3 encrypted, TLS-only, native locking. `terraform/bootstrap` itself uses local state (it creates the bucket),
 which is git-ignored; keep that file safe. `*.tfstate` and `*.tfvars` are never committed.
 
