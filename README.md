@@ -1,206 +1,135 @@
-# secure-serverless-api-aws
+# Secure Serverless Orders API on AWS
 
-Terraform for a serverless API on AWS, built incrementally. Free-tier friendly: anything that
-costs money is off by default and documented below.
+A small serverless API built the way a production one should be: authenticated, validated, least-privilege,
+observable, and deployed through a pipeline that holds no AWS keys. Everything is Terraform.
 
-## Layout
+[![Validate](https://github.com/bdahiya2007/secure-serverless-api-aws/actions/workflows/validate.yml/badge.svg)](https://github.com/bdahiya2007/secure-serverless-api-aws/actions/workflows/validate.yml)
+[![Deploy](https://github.com/bdahiya2007/secure-serverless-api-aws/actions/workflows/deploy.yml/badge.svg)](https://github.com/bdahiya2007/secure-serverless-api-aws/actions/workflows/deploy.yml)
+
+An authenticated client sends `POST /orders`. API Gateway checks the Cognito token and the request shape, a
+Node.js Lambda validates it again and writes one item to DynamoDB, and the result is traced and charted.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  C["Client"] -->|"1. sign in"| CG["Amazon Cognito<br/>user pool"]
+  C -->|"2. POST /orders<br/>+ ID token"| WAF["AWS WAF rate limit<br/>(optional, off by default)"]
+  WAF -.-> APIGW
+  C --> APIGW["API Gateway REST API<br/>Cognito authorizer<br/>schema validation<br/>throttling"]
+  APIGW --> L["Lambda: save-order<br/>Node.js 24, arm64"]
+  L --> D[("DynamoDB: Orders<br/>on-demand")]
+  L -.-> X["X-Ray traces"]
+  APIGW -.-> CW["CloudWatch dashboard"]
+  L -.-> CW
+```
+
+**Delivery pipeline:** nothing reaches AWS without a reviewed pull request, and nothing changes AWS without an approval.
+
+```mermaid
+flowchart LR
+  PR["Pull request"] --> V["validate.yml<br/>fmt, validate, unit tests<br/>no AWS access"]
+  V --> M["Merge to main"]
+  M --> P["deploy.yml: plan<br/>short-lived OIDC credentials"]
+  P --> A{"Manual approval<br/>production environment"}
+  A --> AP["apply the saved plan"]
+```
+
+## What this demonstrates
+
+- **Infrastructure as code, modular:** six reusable Terraform modules with validated inputs and plan-time guardrails.
+- **Security by default:** least-privilege IAM, a permissions boundary, no stored credentials, defense in depth on input.
+- **Cost awareness:** idle cost is about $0, and every billed feature is off until deliberately enabled.
+- **Delivery discipline:** PR validation without AWS access, OIDC to AWS, manual approval, remote locked state.
+- **Operability:** a CloudWatch dashboard, X-Ray tracing, structured logs with bounded retention.
+
+## Security design
+
+| Area | What is in place |
+|---|---|
+| **Authentication** | Cognito user pool (Lite tier), admin-created users only, strong password policy, optional TOTP MFA. API Gateway rejects requests without a valid ID token before the Lambda runs. |
+| **Input handling** | The API validates the body against a JSON Schema, and the Lambda validates again with an allow-list of fields. Malformed JSON and unknown fields get a 400 that never echoes the input. |
+| **No overwrites** | Writes use a condition expression, so an existing `orderId` + `itemId` returns 409 instead of being replaced. |
+| **Least-privilege IAM** | The Lambda role can `PutItem` on one table ARN and write to its own log group. The module rejects `*` actions and resources at plan time, with one documented exception (X-Ray write actions cannot be scoped). |
+| **Permissions boundary** | Every role the pipeline creates must carry a boundary that caps it at logging, X-Ray writes and Orders table data access. |
+| **Pipeline identity** | GitHub OIDC with short-lived tokens, no stored keys. The trust policy pins the repository by immutable ID and allows only `main` (plan) and the `production` environment (apply). Pull requests cannot assume it. |
+| **Pipeline cannot elevate itself** | The deploy role, boundary and state bucket live in a separately applied `bootstrap` stack. Explicit denies stop the role editing itself or removing the boundary. |
+| **State** | Private, versioned, encrypted S3 bucket with TLS-only access and native locking. State and variable files are never committed. |
+| **Account hardening** | S3 Block Public Access on for the whole account, deletion protection on the table and user pool. |
+| **Repository** | Branch protection (admins included), required pull requests, secret scanning with push protection, GitHub Actions pinned by commit SHA. |
+| **Error and log hygiene** | 500 responses are generic, and logs record the error type and request ID, never order contents. |
+
+## Cost awareness
+
+Built and run in a personal AWS account, so cost is a design constraint. Idle cost is effectively zero:
+DynamoDB is on-demand, Lambda and Cognito Lite sit inside their free tiers, and dashboards and metrics use only
+free AWS-published data. Anything billed is off by default and documented:
+
+| Feature | Approximate cost | State |
+|---|---|---|
+| AWS WAF per-IP rate limit | About $6/month while attached, billed hourly | Off (`enable_waf`) |
+| DynamoDB point-in-time recovery | Per GB stored | Off |
+| REST API requests | About $3.50 per million | On, pennies at this scale |
+
+## Repository layout
 
 ```
 terraform/
-├── modules/dynamodb-table/   # reusable, validated DynamoDB table module
-├── modules/lambda-function/  # reusable Lambda + least-privilege IAM role + log group
-├── modules/rest-api/         # reusable REST API: Lambda proxy routes, validation, throttling, Cognito authorizer
-├── modules/cognito-user-pool/ # reusable Cognito user pool + public app client
-├── modules/waf-rate-limit/   # optional AWS WAF per-IP rate limit (billed; off by default)
-├── modules/cloudwatch-dashboard/ # dashboard: API Gateway Count/4XXError, Lambda Invocations/Errors
-└── environments/dev/         # root config: provider, tags, Orders table, save-order function, orders API
-src/save-order/               # Node.js Lambda code and unit tests
+├── bootstrap/            # applied manually: state bucket, permissions boundary, CI deploy role
+├── environments/dev/     # root configuration for the dev environment
+├── modules/              # dynamodb-table, lambda-function, rest-api, cognito-user-pool,
+│                         # waf-rate-limit, cloudwatch-dashboard
+└── README.md             # full technical reference and runbook
+src/save-order/           # Lambda source and unit tests
+.github/workflows/        # validate.yml and deploy.yml
+docs/                     # IAM policy for the engineer's SSO permission set
 ```
 
-## Orders table
+## Try it
 
-| Setting | Value |
-|---|---|
-| Name | `Orders` |
-| Partition key | `orderId` (S) |
-| Sort key | `itemId` (S) |
-| Capacity | On-demand (`PAY_PER_REQUEST`) |
-| Encryption at rest | On, AWS-owned key (free) |
-| Deletion protection | On (free) |
-| Point-in-time recovery | **Off** (billed per GB, no free tier) |
-
-Outputs: `orders_table_name`, `orders_table_arn` (use the ARN for least-privilege IAM later).
-
-## save-order Lambda
-
-Saves one order item (one row) to the Orders table.
-
-| Setting | Value |
-|---|---|
-| Runtime | `nodejs24.x` (latest GA; Node.js 26 is still public preview) |
-| Architecture / memory / timeout | `arm64` / 128 MB / 10 s |
-| IAM permissions | `dynamodb:PutItem` on the Orders table ARN only, plus write to its own log group |
-| Logs | Explicit log group, JSON format, 14-day retention |
-| Config | `TABLE_NAME` environment variable (from the table module output) |
-| AWS SDK | The SDK v3 included in the Lambda runtime (no bundled dependencies) |
-| Tracing | X-Ray active tracing (`enable_xray_tracing`); see Observability |
-
-The module rejects wildcard IAM actions (`*`, `service:*`) and the `*` resource at plan time.
-
-**Input** (`orderId` and `itemId` required; no other fields are accepted). The function accepts either
-the order object itself (direct invoke) or an API Gateway proxy event whose `body` is the order as JSON:
-
-```json
-{ "orderId": "o-1001", "itemId": "i-1", "quantity": 2, "price": 9.99 }
-```
-
-| Status | Meaning |
-|---|---|
-| 201 | Saved (`createdAt` is added by the function) |
-| 400 | Validation failed |
-| 409 | `orderId` + `itemId` already exists (never overwritten) |
-| 500 | Unexpected error (generic message; details are not returned or logged) |
-
-Test after apply:
+Setup, deployment and the cost switches are documented in the [Terraform reference](terraform/README.md),
+including how to create a test user. Once deployed, a call looks like this:
 
 ```bash
-aws lambda invoke --function-name save-order \
-  --cli-binary-format raw-in-base64-out \
-  --payload '{"orderId":"o-1001","itemId":"i-1","quantity":2,"price":9.99}' /dev/stdout
-```
-
-## orders API (`POST /orders`)
-
-| Setting | Value |
-|---|---|
-| Type | API Gateway REST API, regional endpoint, stage `dev` |
-| Integration | Lambda proxy integration to `save-order` (only this API/stage/method may invoke it) |
-| Authorization | **Cognito user pool authorizer** (`COGNITO_USER_POOLS`): requests need a valid ID token in the `Authorization` header. The module rejects `NONE`; `AWS_IAM` is also supported. |
-| Request validation | JSON Schema model (`terraform/environments/dev/models/create-order.json`) rejects bad bodies before the Lambda runs. The Lambda validates again (defense in depth); keep the two in sync. |
-| Throttling | 5 requests/second, burst 10, stage-wide |
-| Not enabled | Access logs (needs an account-wide CloudWatch role), caching, CORS, custom domain, X-Ray. WAF is available but **off by default** (see below). |
-
-Cost: REST API requests are about $3.50 per million. There is no charge while idle.
-
-## Observability
-
-**CloudWatch dashboard** `orders-api-dev` (URL in `terraform output dashboard_url`) shows four widgets:
-API Gateway `Count` and `4XXError`, Lambda `Invocations` and `Errors`. These are AWS-published metrics, which
-are free, and the first 3 custom dashboards per account are free (each extra one is $3/month). The dashboard
-uses no logs queries or custom metrics, which would be billed.
-
-**X-Ray active tracing** is enabled on the Lambda. Enabling it is free; traces count against the X-Ray free
-tier (verify current limits on the pricing page; beyond it, traces are billed per million). The Lambda role
-gets `xray:PutTraceSegments` and `xray:PutTelemetryRecords` on `*`: X-Ray write actions do not support
-resource-level permissions, so this is the one deliberate wildcard, limited to those two write-only actions.
-Set `enable_xray_tracing = false` in `environments/dev/main.tf` to turn it off.
-
-Limits: tracing starts at the Lambda (API Gateway stage tracing is not enabled), and DynamoDB calls do not
-appear as separate nodes because that needs the X-Ray SDK bundled into the function (an npm dependency).
-
-## WAF rate limit (optional, billed, OFF by default)
-
-A WAF web ACL with one rate-based rule blocks any IP that sends more than 100 requests in 5 minutes
-(HTTP 403). It is evaluated before API Gateway, so blocked requests never reach the authorizer or Lambda.
-API Gateway's own throttle (5 req/s, burst 10) is stage-wide; this rule is per IP.
-
-**Cost:** $5.00 per web ACL + $1.00 per rule per month, **prorated hourly and billed even when idle**,
-plus $0.60 per million requests. No free tier. One ACL with one rule is about $6 per month, or about
-$0.008 per hour, which exceeds the $5 budget if left on. Only enable it to demonstrate.
-
-```bash
-cd terraform/environments/dev
-terraform apply -var enable_waf=true     # create (billing starts)
-terraform apply                           # remove: re-apply WITHOUT the variable
-terraform output waf_enabled              # check it is false when you are done
-```
-
-Demonstrate the block (no credentials needed; WAF runs before the authorizer). Expect 401/429 at first,
-then 403 once the limit is exceeded (WAF enforcement can lag by about a minute):
-
-```bash
-URL=$(terraform output -raw create_order_url)
-for i in $(seq 1 250); do curl -s -o /dev/null -w "%{http_code}\n" -X POST "$URL" -d '{}'; done | sort | uniq -c
-```
-
-Not enabled (each costs extra): WAF logging, managed rule groups, Bot Control, CAPTCHA.
-
-## Cognito user pool
-
-| Setting | Value |
-|---|---|
-| Tier | `LITE`: 10,000 monthly active users free, permanently. `PLUS` is rejected (no free tier). |
-| Sign-up | Admin-created users only (no self sign-up) |
-| Sign-in | Email address; strong password policy (12+ characters, upper, lower, number, symbol) |
-| MFA | Optional, app-based TOTP only (free). SMS MFA is billed and not configured. |
-| App client | Public (no secret), `USER_PASSWORD_AUTH` for CLI testing; user-existence errors hidden; token revocation on |
-| Tokens | ID and access tokens 60 min, refresh token 7 days |
-| Deletion protection | On. Set `deletion_protection_enabled = false` and apply before `terraform destroy`. |
-
-Terraform does not create users, so no password ever lands in state. Create a test user:
-
-```bash
-cd terraform/environments/dev
-POOL=$(terraform output -raw user_pool_id)
-CLIENT=$(terraform output -raw user_pool_client_id)
-EMAIL=you@example.com
-
-aws cognito-idp admin-create-user --user-pool-id "$POOL" --username "$EMAIL" \
-  --user-attributes Name=email,Value="$EMAIL" Name=email_verified,Value=true \
-  --message-action SUPPRESS
-
-read -rsp "New password: " PW; echo
-aws cognito-idp admin-set-user-password --user-pool-id "$POOL" --username "$EMAIL" \
-  --password "$PW" --permanent
-```
-
-Sign in, then call the API with the **ID token**:
-
-```bash
-ID_TOKEN=$(aws cognito-idp initiate-auth --client-id "$CLIENT" \
-  --auth-flow USER_PASSWORD_AUTH \
-  --auth-parameters USERNAME="$EMAIL",PASSWORD="$PW" \
-  --query AuthenticationResult.IdToken --output text)
-
-curl -sS -X POST "$(terraform output -raw create_order_url)" \
+curl -X POST "$API_URL/orders" \
   -H "Authorization: $ID_TOKEN" -H "Content-Type: application/json" \
   -d '{"orderId":"o-1001","itemId":"i-1","quantity":2,"price":9.99}'
 ```
 
-Without a valid token the API returns `401 Unauthorized`. Remove the test user when done:
+| Response | Meaning |
+|---|---|
+| `201` | Saved |
+| `400` | Rejected by API Gateway or the Lambda: invalid body |
+| `401` | Missing or invalid token |
+| `409` | That order item already exists |
 
-```bash
-aws cognito-idp admin-delete-user --user-pool-id "$POOL" --username "$EMAIL"
-```
-
-Unit tests need no dependencies (Node 22+):
+The Lambda logic has 15 unit tests using Node's built-in runner and no dependencies:
 
 ```bash
 node --test src/save-order/
 ```
 
-## Usage
+## Design decisions
 
-```bash
-cd terraform/environments/dev
-terraform init
-terraform plan
-terraform apply   # creates real resources; Lambda and on-demand DynamoDB cost nothing while idle
-```
+- **REST API, not HTTP API.** The requirement named a REST API, which also provides request validation and
+  usage controls. An HTTP API is cheaper and would suit a simpler need.
+- **Lambda proxy integration** instead of VTL mapping templates, so the function owns the contract and can be
+  tested without API Gateway.
+- **Node.js 24, not 26.** Node.js 26 is still a Lambda public preview, so the latest generally available runtime
+  was used.
+- **Runtime-included AWS SDK.** This avoids an npm build step. AWS recommends bundling the SDK for strict version
+  control, which is a listed follow-up.
+- **ID token authorizer.** Simplest correct option for a first version. Scopes and an access-token flow would suit
+  multiple resource servers.
+- **Separate bootstrap stack.** Slightly more manual work, in exchange for a pipeline that cannot rewrite its own permissions.
 
-To destroy, first set `deletion_protection_enabled = false` in `environments/dev/main.tf` and apply.
+## Not implemented
 
-## State
+Read, list, update and delete endpoints, and per-user ownership of orders. Multiple environments, multi-region
+disaster recovery, API access logs and CloudWatch alarms. Hosted sign-in with PKCE for browser clients, and
+the X-Ray SDK for DynamoDB sub-segments. The first two items are the most natural next steps.
 
-Local state for now (`*.tfstate` is git-ignored; it can hold sensitive data). Planned: S3 backend
-with encryption and versioning.
+## Related
 
-## Cost switches (off until approved)
-
-- `enable_point_in_time_recovery` — continuous backups, billed per GB.
-- Customer-managed KMS key — monthly fee per key (not implemented).
-- Cognito PLUS tier, SMS MFA, SES email — billed; not configured.
-- WAF (`enable_waf`) — about $6/month while attached; off by default.
-- Extra CloudWatch dashboards (beyond 3 free), logs-insights widgets, custom metrics — billed; not used.
-- X-Ray tracing, dead-letter queue, CloudWatch alarms, VPC attachment (NAT gateway) — not enabled.
-- AWS WAF (monthly fee for the web ACL and rule), API caching (hourly), access logs, custom domain — not enabled.
+[three-tier-web-app-aws](https://github.com/bdahiya2007/three-tier-web-app-aws) is another project in this portfolio.
+It uses the same OIDC, approval-gated deployment approach with CloudFormation.

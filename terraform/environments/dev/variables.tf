@@ -27,3 +27,9 @@ variable "waf_rate_limit" {
   type        = number
   default     = 100
 }
+
+variable "app_role_boundary_name" {
+  description = "Name of the permissions boundary policy created by terraform/bootstrap."
+  type        = string
+  default     = "serverless-api-pipeline-app-role-boundary"
+}

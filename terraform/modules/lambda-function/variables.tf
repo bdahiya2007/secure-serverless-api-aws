@@ -101,6 +101,12 @@ variable "log_retention_days" {
   }
 }
 
+variable "permissions_boundary" {
+  description = "ARN of a permissions boundary policy for the execution role (the ceiling for what the role can ever do, even if its own policy is widened). Null for none."
+  type        = string
+  default     = null
+}
+
 variable "enable_xray_tracing" {
   description = "Active X-Ray tracing. Adds a deliberate, narrow IAM exception: xray:PutTraceSegments and xray:PutTelemetryRecords do not support resource-level permissions, so they are granted on \"*\" (write-only, no read access)."
   type        = bool

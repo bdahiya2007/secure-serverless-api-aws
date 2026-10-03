@@ -1,3 +1,10 @@
+data "aws_caller_identity" "current" {}
+
+locals {
+  # Created by terraform/bootstrap; the pipeline can only create roles that carry it.
+  app_role_boundary_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:policy/${var.app_role_boundary_name}"
+}
+
 module "orders_table" {
   source = "../../modules/dynamodb-table"
 
@@ -23,7 +30,8 @@ module "save_order_function" {
     TABLE_NAME = module.orders_table.table_name
   }
 
-  enable_xray_tracing = true # free tier covers learning volumes; set false to disable
+  enable_xray_tracing  = true # free tier covers learning volumes; set false to disable
+  permissions_boundary = local.app_role_boundary_arn
 
   # Least privilege: write one item type to one table. No read, update or delete.
   policy_statements = [
