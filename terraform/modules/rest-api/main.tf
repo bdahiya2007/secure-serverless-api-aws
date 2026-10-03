@@ -81,15 +81,11 @@ resource "aws_lambda_permission" "this" {
 resource "aws_api_gateway_deployment" "this" {
   rest_api_id = aws_api_gateway_rest_api.this.id
 
-  # Redeploy whenever any part of the API definition changes.
+  # Redeploy whenever the route definitions change. Hashing the module inputs (known at
+  # plan time) instead of whole resource objects avoids a spurious redeploy after the
+  # first apply, when provider-filled defaults change the objects.
   triggers = {
-    redeployment = sha1(jsonencode([
-      aws_api_gateway_resource.this,
-      aws_api_gateway_method.this,
-      aws_api_gateway_integration.this,
-      aws_api_gateway_model.this,
-      aws_api_gateway_request_validator.body,
-    ]))
+    redeployment = sha1(jsonencode(var.routes))
   }
 
   lifecycle {
