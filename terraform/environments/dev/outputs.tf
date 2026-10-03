@@ -42,3 +42,8 @@ output "waf_web_acl_arn" {
   description = "ARN of the WAF web ACL, or null when WAF is disabled."
   value       = try(module.orders_api_waf[0].web_acl_arn, null)
 }
+
+output "dashboard_url" {
+  description = "Console URL of the CloudWatch dashboard."
+  value       = module.orders_dashboard.dashboard_url
+}

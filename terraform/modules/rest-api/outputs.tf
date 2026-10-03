@@ -22,3 +22,8 @@ output "stage_arn" {
   description = "ARN of the stage, for associating a WAF web ACL."
   value       = aws_api_gateway_stage.this.arn
 }
+
+output "api_name" {
+  description = "Name of the REST API (the ApiName metric dimension)."
+  value       = aws_api_gateway_rest_api.this.name
+}

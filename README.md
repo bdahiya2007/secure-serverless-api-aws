@@ -12,6 +12,7 @@ terraform/
 ├── modules/rest-api/         # reusable REST API: Lambda proxy routes, validation, throttling, Cognito authorizer
 ├── modules/cognito-user-pool/ # reusable Cognito user pool + public app client
 ├── modules/waf-rate-limit/   # optional AWS WAF per-IP rate limit (billed; off by default)
+├── modules/cloudwatch-dashboard/ # dashboard: API Gateway Count/4XXError, Lambda Invocations/Errors
 └── environments/dev/         # root config: provider, tags, Orders table, save-order function, orders API
 src/save-order/               # Node.js Lambda code and unit tests
 ```
@@ -42,6 +43,7 @@ Saves one order item (one row) to the Orders table.
 | Logs | Explicit log group, JSON format, 14-day retention |
 | Config | `TABLE_NAME` environment variable (from the table module output) |
 | AWS SDK | The SDK v3 included in the Lambda runtime (no bundled dependencies) |
+| Tracing | X-Ray active tracing (`enable_xray_tracing`); see Observability |
 
 The module rejects wildcard IAM actions (`*`, `service:*`) and the `*` resource at plan time.
 
@@ -79,6 +81,22 @@ aws lambda invoke --function-name save-order \
 | Not enabled | Access logs (needs an account-wide CloudWatch role), caching, CORS, custom domain, X-Ray. WAF is available but **off by default** (see below). |
 
 Cost: REST API requests are about $3.50 per million. There is no charge while idle.
+
+## Observability
+
+**CloudWatch dashboard** `orders-api-dev` (URL in `terraform output dashboard_url`) shows four widgets:
+API Gateway `Count` and `4XXError`, Lambda `Invocations` and `Errors`. These are AWS-published metrics, which
+are free, and the first 3 custom dashboards per account are free (each extra one is $3/month). The dashboard
+uses no logs queries or custom metrics, which would be billed.
+
+**X-Ray active tracing** is enabled on the Lambda. Enabling it is free; traces count against the X-Ray free
+tier (verify current limits on the pricing page; beyond it, traces are billed per million). The Lambda role
+gets `xray:PutTraceSegments` and `xray:PutTelemetryRecords` on `*`: X-Ray write actions do not support
+resource-level permissions, so this is the one deliberate wildcard, limited to those two write-only actions.
+Set `enable_xray_tracing = false` in `environments/dev/main.tf` to turn it off.
+
+Limits: tracing starts at the Lambda (API Gateway stage tracing is not enabled), and DynamoDB calls do not
+appear as separate nodes because that needs the X-Ray SDK bundled into the function (an npm dependency).
 
 ## WAF rate limit (optional, billed, OFF by default)
 
@@ -183,5 +201,6 @@ with encryption and versioning.
 - Customer-managed KMS key — monthly fee per key (not implemented).
 - Cognito PLUS tier, SMS MFA, SES email — billed; not configured.
 - WAF (`enable_waf`) — about $6/month while attached; off by default.
+- Extra CloudWatch dashboards (beyond 3 free), logs-insights widgets, custom metrics — billed; not used.
 - X-Ray tracing, dead-letter queue, CloudWatch alarms, VPC attachment (NAT gateway) — not enabled.
 - AWS WAF (monthly fee for the web ACL and rule), API caching (hourly), access logs, custom domain — not enabled.
