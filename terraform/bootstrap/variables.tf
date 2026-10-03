@@ -81,3 +81,9 @@ variable "state_noncurrent_version_days" {
   type        = number
   default     = 90
 }
+
+variable "block_public_access_account_wide" {
+  description = "Turn on S3 Block Public Access for the whole account (free). Safe only if no bucket intentionally serves public content; the buckets were audited before enabling this."
+  type        = bool
+  default     = true
+}

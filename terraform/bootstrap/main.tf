@@ -24,6 +24,21 @@ locals {
 }
 
 # ---------------------------------------------------------------------------
+# Account-wide S3 Block Public Access: a safety net for every bucket, present and future.
+# Free. Audited first: all existing buckets already block public access and are read only
+# through CloudFront (origin access control), so nothing depends on public access.
+# ---------------------------------------------------------------------------
+
+resource "aws_s3_account_public_access_block" "this" {
+  count = var.block_public_access_account_wide ? 1 : 0
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# ---------------------------------------------------------------------------
 # Terraform state bucket: private, versioned, encrypted, TLS-only, native locking
 # ---------------------------------------------------------------------------
 

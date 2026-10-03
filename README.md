@@ -205,6 +205,10 @@ policy), reprovision the account, and run `aws sso login` again. It only allows 
 - **The pipeline cannot change its own permissions.** The deploy role, state bucket and permissions boundary live
   in `terraform/bootstrap`, applied manually. The role can only create IAM roles that carry the boundary
   (a ceiling: logs, X-Ray writes, data access to the Orders table), and explicit Denies protect itself and the boundary.
+- **Account-wide S3 Block Public Access** is enabled by the bootstrap (free;
+  `block_public_access_account_wide`). Every existing bucket was audited first: all already block public
+  access and are read only through CloudFront. If you ever need a public bucket, set the variable to
+  `false` and apply the bootstrap.
 - **State** is in a private, versioned, TLS-only, SSE-S3 encrypted S3 bucket with native locking
   (`use_lockfile`), old versions expire after 90 days. No DynamoDB lock table. Cost: pennies.
 - **WAF caveat.** `deploy.yml` applies with `enable_waf=false` unless you run it manually with the input ticked.
