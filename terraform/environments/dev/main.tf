@@ -33,6 +33,17 @@ module "save_order_function" {
   ]
 }
 
+module "orders_user_pool" {
+  source = "../../modules/cognito-user-pool"
+
+  name = "orders-api-users"
+  tier = "LITE" # 10,000 monthly active users free; PLUS has no free tier
+
+  allow_admin_create_user_only = true       # no self sign-up; create users with the CLI
+  mfa_configuration            = "OPTIONAL" # app-based TOTP only (free); SMS MFA is billed
+  deletion_protection_enabled  = true
+}
+
 module "orders_api" {
   source = "../../modules/rest-api"
 
@@ -40,13 +51,15 @@ module "orders_api" {
   description = "REST API for creating orders"
   stage_name  = var.environment
 
+  cognito_user_pool_arns = [module.orders_user_pool.user_pool_arn]
+
   routes = {
     CreateOrder = {
       path_part            = "orders"
       http_method          = "POST"
       lambda_function_name = module.save_order_function.function_name
       lambda_invoke_arn    = module.save_order_function.invoke_arn
-      authorization_type   = "AWS_IAM" # swapped for the Cognito authorizer in a later step
+      authorization_type   = "COGNITO_USER_POOLS"
       request_schema       = file("${path.module}/models/create-order.json")
     }
   }
