@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createHandler, validateOrder } from "./save-order.mjs";
+import { createHandler, extractOrder, validateOrder } from "./save-order.mjs";
 
 const fixedNow = () => new Date("2026-10-03T12:00:00.000Z");
 const ctx = { awsRequestId: "req-1" };
@@ -92,4 +92,70 @@ test("returns a generic 500 and does not leak error details or order data", asyn
   assert.ok(logged.includes("req-1"));
   assert.ok(!logged.includes("secret internal detail"));
   assert.ok(!logged.includes("12.34"));
+});
+
+// --- API Gateway proxy events ---
+
+const proxyEvent = (body, extra = {}) => ({
+  httpMethod: "POST",
+  path: "/orders",
+  requestContext: { stage: "dev" },
+  body,
+  isBase64Encoded: false,
+  ...extra,
+});
+
+test("API Gateway event: saves the order from the JSON body", async () => {
+  const { handler, calls } = setup();
+  const res = await handler(proxyEvent(JSON.stringify({ orderId: "o-1", itemId: "i-1", quantity: 3 })), ctx);
+
+  assert.equal(res.statusCode, 201);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].Item.orderId, "o-1");
+  assert.equal(calls[0].Item.quantity, 3);
+});
+
+test("API Gateway event: decodes a base64 body", async () => {
+  const { handler, calls } = setup();
+  const body = Buffer.from(JSON.stringify({ orderId: "o-2", itemId: "i-2" })).toString("base64");
+  const res = await handler(proxyEvent(body, { isBase64Encoded: true }), ctx);
+
+  assert.equal(res.statusCode, 201);
+  assert.equal(calls[0].Item.orderId, "o-2");
+});
+
+test("API Gateway event: malformed JSON returns 400 without echoing the input", async () => {
+  const { handler, calls } = setup();
+  const res = await handler(proxyEvent("{not json secret-value"), ctx);
+
+  assert.equal(res.statusCode, 400);
+  assert.ok(!res.body.includes("secret-value"));
+  assert.equal(calls.length, 0);
+});
+
+test("API Gateway event: missing or null body returns 400", async () => {
+  const { handler, calls } = setup();
+  for (const body of [undefined, null, ""]) {
+    assert.equal((await handler(proxyEvent(body), ctx)).statusCode, 400);
+  }
+  assert.equal(calls.length, 0);
+});
+
+test("API Gateway event: a valid JSON body is still validated", async () => {
+  const { handler, calls } = setup();
+  const res = await handler(proxyEvent(JSON.stringify({ itemId: "i-1", extra: true })), ctx);
+  assert.equal(res.statusCode, 400);
+  assert.equal(calls.length, 0);
+});
+
+test("API Gateway event: a JSON array or scalar body is rejected", async () => {
+  const { handler } = setup();
+  for (const body of ["[]", "5", '"x"', "null"]) {
+    assert.equal((await handler(proxyEvent(body), ctx)).statusCode, 400);
+  }
+});
+
+test("extractOrder passes direct invocations through unchanged", () => {
+  const order = { orderId: "o", itemId: "i" };
+  assert.equal(extractOrder(order).order, order);
 });

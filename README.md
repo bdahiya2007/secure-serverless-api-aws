@@ -9,7 +9,8 @@ costs money is off by default and documented below.
 terraform/
 ├── modules/dynamodb-table/   # reusable, validated DynamoDB table module
 ├── modules/lambda-function/  # reusable Lambda + least-privilege IAM role + log group
-└── environments/dev/         # root config: provider, tags, Orders table, save-order function
+├── modules/rest-api/         # reusable REST API: Lambda proxy routes, validation, throttling
+└── environments/dev/         # root config: provider, tags, Orders table, save-order function, orders API
 src/save-order/               # Node.js Lambda code and unit tests
 ```
 
@@ -42,7 +43,8 @@ Saves one order item (one row) to the Orders table.
 
 The module rejects wildcard IAM actions (`*`, `service:*`) and the `*` resource at plan time.
 
-**Input** (`orderId` and `itemId` required; no other fields are accepted):
+**Input** (`orderId` and `itemId` required; no other fields are accepted). The function accepts either
+the order object itself (direct invoke) or an API Gateway proxy event whose `body` is the order as JSON:
 
 ```json
 { "orderId": "o-1001", "itemId": "i-1", "quantity": 2, "price": 9.99 }
@@ -62,6 +64,34 @@ aws lambda invoke --function-name save-order \
   --cli-binary-format raw-in-base64-out \
   --payload '{"orderId":"o-1001","itemId":"i-1","quantity":2,"price":9.99}' /dev/stdout
 ```
+
+## orders API (`POST /orders`)
+
+| Setting | Value |
+|---|---|
+| Type | API Gateway REST API, regional endpoint, stage `dev` |
+| Integration | Lambda proxy integration to `save-order` (only this API/stage/method may invoke it) |
+| Authorization | **`AWS_IAM`**: requests must be SigV4-signed. The module rejects `NONE`. Cognito replaces this in a later step. |
+| Request validation | JSON Schema model (`terraform/environments/dev/models/create-order.json`) rejects bad bodies before the Lambda runs. The Lambda validates again (defense in depth); keep the two in sync. |
+| Throttling | 5 requests/second, burst 10, stage-wide |
+| Not enabled | Access logs (needs an account-wide CloudWatch role), WAF, caching, CORS, custom domain, X-Ray |
+
+Cost: REST API requests are about $3.50 per million. There is no charge while idle.
+
+Call it after apply (SigV4 with your SSO credentials):
+
+```bash
+URL=$(terraform -chdir=terraform/environments/dev output -raw create_order_url)
+eval "$(aws configure export-credentials --format env)"
+curl -sS -X POST "$URL" \
+  --aws-sigv4 "aws:amz:us-east-1:execute-api" \
+  --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" \
+  -H "x-amz-security-token: $AWS_SESSION_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"orderId":"o-1001","itemId":"i-1","quantity":2,"price":9.99}'
+```
+
+An unsigned request returns `403 Missing Authentication Token`.
 
 Unit tests need no dependencies (Node 22+):
 
@@ -90,3 +120,4 @@ with encryption and versioning.
 - `enable_point_in_time_recovery` — continuous backups, billed per GB.
 - Customer-managed KMS key — monthly fee per key (not implemented).
 - X-Ray tracing, dead-letter queue, CloudWatch alarms, VPC attachment (NAT gateway) — not enabled.
+- AWS WAF (monthly fee for the web ACL and rule), API caching (hourly), access logs, custom domain — not enabled.

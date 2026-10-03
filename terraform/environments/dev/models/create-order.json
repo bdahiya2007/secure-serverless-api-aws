@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "title": "CreateOrder",
+  "type": "object",
+  "required": ["orderId", "itemId"],
+  "additionalProperties": false,
+  "properties": {
+    "orderId": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,128}$" },
+    "itemId": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,128}$" },
+    "quantity": { "type": "integer", "minimum": 1, "maximum": 10000 },
+    "price": { "type": "number", "minimum": 0 }
+  }
+}

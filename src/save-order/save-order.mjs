@@ -10,6 +10,27 @@ const response = (statusCode, body) => ({
   body: JSON.stringify(body),
 });
 
+// API Gateway proxy events carry the order as a JSON string in `body`.
+// Direct invocations (aws lambda invoke) pass the order object itself.
+const isProxyEvent = (event) =>
+  event !== null && typeof event === "object" && !Array.isArray(event) && "requestContext" in event;
+
+// Returns { order } on success or { error } with a message that never echoes the input.
+export function extractOrder(event) {
+  if (!isProxyEvent(event)) return { order: event };
+
+  if (typeof event.body !== "string" || event.body === "") {
+    return { error: "Request body is required" };
+  }
+
+  const raw = event.isBase64Encoded ? Buffer.from(event.body, "base64").toString("utf8") : event.body;
+  try {
+    return { order: JSON.parse(raw) };
+  } catch {
+    return { error: "Request body must be valid JSON" };
+  }
+}
+
 // Returns an array of error strings; empty means the order is valid.
 export function validateOrder(order) {
   if (order === null || typeof order !== "object" || Array.isArray(order)) {
@@ -46,14 +67,19 @@ export function validateOrder(order) {
 // putItem: async ({ TableName, Item, ConditionExpression }) => void
 export function createHandler({ putItem, tableName, now = () => new Date() }) {
   return async function handler(event, context) {
-    const errors = validateOrder(event);
+    const { order, error } = extractOrder(event);
+    if (error) {
+      return response(400, { message: "Invalid order", errors: [error] });
+    }
+
+    const errors = validateOrder(order);
     if (errors.length > 0) {
       return response(400, { message: "Invalid order", errors });
     }
 
     const item = { createdAt: now().toISOString() };
     for (const field of ALLOWED_FIELDS) {
-      if (event[field] !== undefined) item[field] = event[field];
+      if (order[field] !== undefined) item[field] = order[field];
     }
 
     try {
