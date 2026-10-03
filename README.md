@@ -106,7 +106,7 @@ curl -X POST "$API_URL/orders" \
 The Lambda logic has 15 unit tests using Node's built-in runner and no dependencies:
 
 ```bash
-node --test src/save-order/
+node --test "src/save-order/*.test.mjs"
 ```
 
 ## Design decisions

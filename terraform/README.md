@@ -187,7 +187,7 @@ The Lambda logic has 15 unit tests using Node's built-in runner (no dependencies
 injected, so no AWS access is needed. CI runs them on every pull request.
 
 ```bash
-node --test src/save-order/
+node --test "src/save-order/*.test.mjs"
 ```
 
 ## AWS account prerequisites (your SSO permission set)
