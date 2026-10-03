@@ -101,6 +101,12 @@ variable "log_retention_days" {
   }
 }
 
+variable "enable_xray_tracing" {
+  description = "Active X-Ray tracing. Adds a deliberate, narrow IAM exception: xray:PutTraceSegments and xray:PutTelemetryRecords do not support resource-level permissions, so they are granted on \"*\" (write-only, no read access)."
+  type        = bool
+  default     = false
+}
+
 variable "tags" {
   description = "Tags applied to all resources in the module."
   type        = map(string)

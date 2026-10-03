@@ -23,6 +23,8 @@ module "save_order_function" {
     TABLE_NAME = module.orders_table.table_name
   }
 
+  enable_xray_tracing = true # free tier covers learning volumes; set false to disable
+
   # Least privilege: write one item type to one table. No read, update or delete.
   policy_statements = [
     {
@@ -73,4 +75,14 @@ module "orders_api_waf" {
   name         = "orders-api-waf"
   resource_arn = module.orders_api.stage_arn
   rate_limit   = var.waf_rate_limit
+}
+
+module "orders_dashboard" {
+  source = "../../modules/cloudwatch-dashboard"
+
+  name          = "orders-api-${var.environment}"
+  region        = var.aws_region
+  api_name      = module.orders_api.api_name
+  stage_name    = module.orders_api.stage_name
+  function_name = module.save_order_function.function_name
 }

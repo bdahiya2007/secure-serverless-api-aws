@@ -37,6 +37,18 @@ data "aws_iam_policy_document" "permissions" {
     resources = ["${aws_cloudwatch_log_group.this.arn}:*"]
   }
 
+  # X-Ray write actions cannot be scoped to a resource (AWS limitation), so "*" is
+  # unavoidable here. It is limited to the two write actions Lambda tracing needs.
+  dynamic "statement" {
+    for_each = var.enable_xray_tracing ? [1] : []
+
+    content {
+      sid       = "WriteXRayTraces"
+      actions   = ["xray:PutTraceSegments", "xray:PutTelemetryRecords"]
+      resources = ["*"]
+    }
+  }
+
   dynamic "statement" {
     for_each = var.policy_statements
 
@@ -73,6 +85,14 @@ resource "aws_lambda_function" "this" {
 
     content {
       variables = var.environment_variables
+    }
+  }
+
+  dynamic "tracing_config" {
+    for_each = var.enable_xray_tracing ? [1] : []
+
+    content {
+      mode = "Active"
     }
   }
 
