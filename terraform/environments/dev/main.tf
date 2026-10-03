@@ -32,3 +32,22 @@ module "save_order_function" {
     }
   ]
 }
+
+module "orders_api" {
+  source = "../../modules/rest-api"
+
+  name        = "orders-api"
+  description = "REST API for creating orders"
+  stage_name  = var.environment
+
+  routes = {
+    CreateOrder = {
+      path_part            = "orders"
+      http_method          = "POST"
+      lambda_function_name = module.save_order_function.function_name
+      lambda_invoke_arn    = module.save_order_function.invoke_arn
+      authorization_type   = "AWS_IAM" # swapped for the Cognito authorizer in a later step
+      request_schema       = file("${path.module}/models/create-order.json")
+    }
+  }
+}
