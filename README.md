@@ -13,6 +13,9 @@ terraform/
 ├── modules/cognito-user-pool/ # reusable Cognito user pool + public app client
 ├── modules/waf-rate-limit/   # optional AWS WAF per-IP rate limit (billed; off by default)
 ├── modules/cloudwatch-dashboard/ # dashboard: API Gateway Count/4XXError, Lambda Invocations/Errors
+├── bootstrap/                # applied MANUALLY: state bucket, permissions boundary, CI deploy role
+.github/workflows/            # validate.yml (PRs, no AWS) and deploy.yml (push to main, OIDC + approval)
+docs/permission-set-inline-policy.json  # extra IAM your SSO permission set needs
 └── environments/dev/         # root config: provider, tags, Orders table, save-order function, orders API
 src/save-order/               # Node.js Lambda code and unit tests
 ```
@@ -179,6 +182,69 @@ Unit tests need no dependencies (Node 22+):
 node --test src/save-order/
 ```
 
+## AWS account prerequisites (your SSO permission set)
+
+`PowerUserAccess` cannot manage IAM, but Terraform must create the Lambda execution role and, once, the
+bootstrap resources. Add [docs/permission-set-inline-policy.json](docs/permission-set-inline-policy.json) as an
+inline policy on the permission set (IAM Identity Center -> Permission sets -> PowerUserAccess -> Inline
+policy), reprovision the account, and run `aws sso login` again. It only allows IAM on `save-order-*` and
+`serverless-api-pipeline-*` roles and the pipeline boundary policy.
+
+## CI/CD (GitHub Actions)
+
+| Workflow | Trigger | AWS access | What it does |
+|---|---|---|---|
+| `validate.yml` | Pull request to `main` | **None** | `terraform fmt -check`, `validate` (dev + bootstrap), Lambda unit tests, rejects committed state/tfvars. Required status check: **Validate Terraform and Lambda tests**. |
+| `deploy.yml` | Push to `main` (changes under `terraform/environments`, `terraform/modules`, `src`) or manual run | OIDC role | **plan**, then **apply behind the `production` environment (manual approval)** of exactly that saved plan. |
+
+- **No stored AWS keys.** The workflow assumes `AWS_DEPLOY_ROLE_ARN` through GitHub OIDC (short-lived tokens).
+  The role's trust policy checks this repo by immutable owner/repo ID and allows only the `main` branch (plan)
+  and the `production` environment (apply). Pull requests cannot assume it.
+- **Packaging is Terraform.** `archive_file` zips `src/save-order`; `apply` updates the Lambda when the code hash
+  changes. There is no separate `update-function-code` step.
+- **The pipeline cannot change its own permissions.** The deploy role, state bucket and permissions boundary live
+  in `terraform/bootstrap`, applied manually. The role can only create IAM roles that carry the boundary
+  (a ceiling: logs, X-Ray writes, data access to the Orders table), and explicit Denies protect itself and the boundary.
+- **State** is in a private, versioned, TLS-only, SSE-S3 encrypted S3 bucket with native locking
+  (`use_lockfile`), old versions expire after 90 days. No DynamoDB lock table. Cost: pennies.
+- **WAF caveat.** `deploy.yml` applies with `enable_waf=false` unless you run it manually with the input ticked.
+  A push to `main` therefore **removes** a WAF you enabled by hand. Enable it via the workflow dispatch input.
+- **First CI runs may report `AccessDenied`.** The deploy role's policy is resource-scoped and was written
+  without being able to test it from CI. Add the missing action in `terraform/bootstrap/main.tf` and apply it manually.
+- Actions are **pinned by commit SHA** (the repo requires it). Update the SHA and the version comment together.
+
+### One-time setup, in order
+
+```bash
+# 1. Add docs/permission-set-inline-policy.json to your permission set, then: aws sso login
+
+# 2. Bootstrap (local state; creates the state bucket, boundary policy and deploy role)
+cd terraform/bootstrap
+terraform init && terraform plan
+terraform apply
+
+# 3. Move the dev state into the bucket, then attach the boundary to the Lambda role
+cd ../environments/dev
+terraform init -migrate-state            # answer "yes" to copy local state to S3
+terraform plan                           # expect: save-order-role updated in place (boundary)
+terraform apply
+
+# 4. Give GitHub the role ARN (not a secret, but kept as one like the three-tier repo)
+gh secret set AWS_DEPLOY_ROLE_ARN -R bdahiya2007/secure-serverless-api-aws \
+  --body "$(terraform -chdir=../../bootstrap output -raw deploy_role_arn)"
+```
+
+After the PR that adds `validate.yml` is merged, add its job name as a required status check on `main`:
+
+```bash
+gh api -X PATCH repos/bdahiya2007/secure-serverless-api-aws/branches/main/protection/required_status_checks \
+  -f strict=true -f 'contexts[]=Validate Terraform and Lambda tests'
+```
+
+Repository settings mirror the three-tier repo: public, secret scanning and push protection on, `main`
+protected (PR required, admins included, no force-push or deletion), `production` environment with a required
+reviewer. Differences: Actions SHA pinning is required, and workflows cannot approve pull requests.
+
 ## Usage
 
 ```bash
@@ -186,6 +252,7 @@ cd terraform/environments/dev
 terraform init
 terraform plan
 terraform apply   # creates real resources; Lambda and on-demand DynamoDB cost nothing while idle
+# State is remote (S3): run the one-time CI/CD setup above before the first init on a new machine.
 ```
 
 To destroy, first set `deletion_protection_enabled = false` in `environments/dev/main.tf` and apply.
