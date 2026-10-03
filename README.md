@@ -8,7 +8,9 @@ costs money is off by default and documented below.
 ```
 terraform/
 ├── modules/dynamodb-table/   # reusable, validated DynamoDB table module
-└── environments/dev/         # root config: provider, tags, Orders table
+├── modules/lambda-function/  # reusable Lambda + least-privilege IAM role + log group
+└── environments/dev/         # root config: provider, tags, Orders table, save-order function
+src/save-order/               # Node.js Lambda code and unit tests
 ```
 
 ## Orders table
@@ -25,13 +27,55 @@ terraform/
 
 Outputs: `orders_table_name`, `orders_table_arn` (use the ARN for least-privilege IAM later).
 
+## save-order Lambda
+
+Saves one order item (one row) to the Orders table.
+
+| Setting | Value |
+|---|---|
+| Runtime | `nodejs24.x` (latest GA; Node.js 26 is still public preview) |
+| Architecture / memory / timeout | `arm64` / 128 MB / 10 s |
+| IAM permissions | `dynamodb:PutItem` on the Orders table ARN only, plus write to its own log group |
+| Logs | Explicit log group, JSON format, 14-day retention |
+| Config | `TABLE_NAME` environment variable (from the table module output) |
+| AWS SDK | The SDK v3 included in the Lambda runtime (no bundled dependencies) |
+
+The module rejects wildcard IAM actions (`*`, `service:*`) and the `*` resource at plan time.
+
+**Input** (`orderId` and `itemId` required; no other fields are accepted):
+
+```json
+{ "orderId": "o-1001", "itemId": "i-1", "quantity": 2, "price": 9.99 }
+```
+
+| Status | Meaning |
+|---|---|
+| 201 | Saved (`createdAt` is added by the function) |
+| 400 | Validation failed |
+| 409 | `orderId` + `itemId` already exists (never overwritten) |
+| 500 | Unexpected error (generic message; details are not returned or logged) |
+
+Test after apply:
+
+```bash
+aws lambda invoke --function-name save-order \
+  --cli-binary-format raw-in-base64-out \
+  --payload '{"orderId":"o-1001","itemId":"i-1","quantity":2,"price":9.99}' /dev/stdout
+```
+
+Unit tests need no dependencies (Node 22+):
+
+```bash
+node --test src/save-order/
+```
+
 ## Usage
 
 ```bash
 cd terraform/environments/dev
 terraform init
 terraform plan
-terraform apply   # creates a real table; on-demand, so cost is per request only
+terraform apply   # creates real resources; Lambda and on-demand DynamoDB cost nothing while idle
 ```
 
 To destroy, first set `deletion_protection_enabled = false` in `environments/dev/main.tf` and apply.
@@ -45,3 +89,4 @@ with encryption and versioning.
 
 - `enable_point_in_time_recovery` — continuous backups, billed per GB.
 - Customer-managed KMS key — monthly fee per key (not implemented).
+- X-Ray tracing, dead-letter queue, CloudWatch alarms, VPC attachment (NAT gateway) — not enabled.

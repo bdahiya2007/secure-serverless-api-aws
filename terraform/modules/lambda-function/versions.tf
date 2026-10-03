@@ -11,7 +11,4 @@ terraform {
       version = "~> 2.7"
     }
   }
-
-  # Local state for now (state is git-ignored). Planned: S3 backend with
-  # encryption and versioning in a later stage.
 }

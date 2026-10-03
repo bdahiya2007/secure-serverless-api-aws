@@ -10,3 +10,25 @@ module "orders_table" {
   deletion_protection_enabled   = true
   enable_point_in_time_recovery = false # billed per GB; enable once real data matters
 }
+
+module "save_order_function" {
+  source = "../../modules/lambda-function"
+
+  function_name = "save-order"
+  description   = "Saves a single order item to the Orders DynamoDB table"
+  source_dir    = "${path.root}/../../../src/save-order"
+  handler       = "index.handler"
+
+  environment_variables = {
+    TABLE_NAME = module.orders_table.table_name
+  }
+
+  # Least privilege: write one item type to one table. No read, update or delete.
+  policy_statements = [
+    {
+      sid       = "PutOrderItem"
+      actions   = ["dynamodb:PutItem"]
+      resources = [module.orders_table.table_arn]
+    }
+  ]
+}
