@@ -22,6 +22,8 @@ terraform/
     └── cloudwatch-dashboard/      # API Gateway Count/4XXError, Lambda Invocations/Errors
 src/save-order/                    # Node.js Lambda code and unit tests
 .github/workflows/                 # validate.yml (PRs, no AWS) and deploy.yml (push to main, OIDC + approval)
+scripts/e2e-test.sh                # end-to-end smoke test with automatic cleanup
+docs/TESTING.md                    # how to test: unit, end-to-end, observability, pipeline, WAF
 docs/permission-set-inline-policy.json   # extra IAM your SSO permission set needs
 ```
 
@@ -183,7 +185,8 @@ aws cognito-idp admin-delete-user --user-pool-id "$POOL" --username "$EMAIL"
 
 ## Tests
 
-The Lambda logic has 15 unit tests using Node's built-in runner (no dependencies, Node 22+). The AWS call is
+See the [testing guide](../docs/TESTING.md) for every level, including `./scripts/e2e-test.sh`, which runs the
+API's success and failure cases against the deployed stack and removes its own test data. The Lambda logic has 15 unit tests using Node's built-in runner (no dependencies, Node 22+). The AWS call is
 injected, so no AWS access is needed. CI runs them on every pull request.
 
 ```bash
