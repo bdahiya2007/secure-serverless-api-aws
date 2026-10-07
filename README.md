@@ -81,8 +81,9 @@ terraform/
 │                         # waf-rate-limit, cloudwatch-dashboard
 └── README.md             # full technical reference and runbook
 src/save-order/           # Lambda source and unit tests
+scripts/e2e-test.sh       # end-to-end smoke test with automatic cleanup
 .github/workflows/        # validate.yml and deploy.yml
-docs/                     # IAM policy for the engineer's SSO permission set
+docs/                     # TESTING.md and the IAM policy for the engineer's SSO permission set
 ```
 
 ## Try it
@@ -103,7 +104,9 @@ curl -X POST "$API_URL/orders" \
 | `401` | Missing or invalid token |
 | `409` | That order item already exists |
 
-The Lambda logic has 15 unit tests using Node's built-in runner and no dependencies:
+The full [testing guide](docs/TESTING.md) covers unit tests, an end-to-end script that cleans up after itself,
+observability checks and the pipeline. The Lambda logic has 15 unit tests using Node's built-in runner and no
+dependencies:
 
 ```bash
 node --test "src/save-order/*.test.mjs"
