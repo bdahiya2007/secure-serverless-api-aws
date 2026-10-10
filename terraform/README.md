@@ -16,14 +16,16 @@ terraform/
 └── modules/
     ├── dynamodb-table/            # reusable, validated DynamoDB table module
     ├── lambda-function/           # Lambda + least-privilege IAM role + log group (+ boundary, X-Ray)
-    ├── rest-api/                  # REST API: Lambda proxy routes, direct DynamoDB routes, validation, throttling, Cognito authorizer
+    ├── rest-api/                  # REST API: Lambda proxy routes (optionally with a child path), direct DynamoDB routes, validation, throttling, Cognito authorizer
     ├── apigw-dynamodb-role/       # read-only role API Gateway assumes to query one DynamoDB table
     ├── cognito-user-pool/         # Cognito user pool + public app client
     ├── waf-rate-limit/            # optional WAF per-IP rate limit (billed; off by default)
     └── cloudwatch-dashboard/      # API Gateway Count/4XXError, Lambda Invocations/Errors
-src/save-order/                    # Node.js Lambda code and unit tests
+src/save-order/                    # write Lambda: Node.js code and unit tests
+src/get-order/                     # read Lambda (alternative to the direct read): Node.js code and unit tests
 .github/workflows/                 # validate.yml (PRs, no AWS) and deploy.yml (push to main, OIDC + approval)
 scripts/e2e-test.sh                # end-to-end smoke test with automatic cleanup
+scripts/compare-reads.sh           # interleaved latency comparison: direct read vs Lambda read (cleans up)
 scripts/secret-scan.py             # secret / sensitive-data scanner (pre-commit hook and CI)
 scripts/benchmark/                 # cold-start and memory benchmark (temporary function, cleans up)
 docs/TESTING.md                    # how to test: unit, end-to-end, observability, pipeline, WAF
@@ -132,12 +134,42 @@ The VTL templates have no unit tests. They were checked against a real DynamoDB 
 `scripts/e2e-test.sh` covers the read cases against the deployed stack. See the
 [optimization guide](../docs/OPTIMIZATION_GUIDE.md) for the measurements, the cost arithmetic and the security-risk table.
 
+## Reading orders via Lambda (`GET /orders-via-lambda/{orderId}`)
+
+The same read, done by a Lambda, so the two styles can be compared like for like.
+
+| Setting | Value |
+|---|---|
+| Route | `GET /orders-via-lambda/{orderId}`, same Cognito authorizer. It has its own top-level path so it does not shadow the direct route's `{orderId}`. |
+| Function | `save-order-lookup`: Node.js 24, arm64, **512 MB** (same as `save-order`), X-Ray on. The name carries the `save-order-` prefix so the pipeline's IAM scope (`save-order-*`) covers its role and function. |
+| Permissions | `dynamodb:Query` on the Orders table only, plus its own log group; carries the permissions boundary |
+| Query | The same as the direct read: strongly consistent, at most 100 items, the id passed as a value |
+| Logic | `src/get-order/` (8 unit tests). Pure logic with the DynamoDB call injected, like `save-order`. |
+
+**Differences from the direct read:**
+
+| | Direct integration | Lambda read |
+|---|---|---|
+| Invalid id (a quote, spaces, over 128 characters) | Treated as a lookup: **404** | Validated with an allow-list: **400** |
+| Truncation | Cut at 100 items with no signal | Returns `"truncated": true` when DynamoDB had more |
+| Response JSON | Pretty-printed by the template | Compact |
+| Logs and traces | None | Lambda logs and X-Ray traces |
+| Unit-testable | No (VTL) | Yes |
+| Cold start | None | Yes (about 0.5 s at 512 MB) |
+
+Run `./scripts/compare-reads.sh` to compare their latency (requests are interleaved, so network drift affects both equally).
+
 **Before merging a change like this, update IAM (one-time, manual).** API Gateway checks `iam:PassRole` when a method is
 given an integration role, and by default your SSO permission set and the CI deploy role may only pass roles to Lambda.
 1. Update the permission set with [docs/permission-set-inline-policy.json](../docs/permission-set-inline-policy.json)
    (its pass-role statement now also allows `apigateway.amazonaws.com`), reprovision the account and run `aws sso login`.
 2. Apply the bootstrap, which updates the deploy role the same way: `cd terraform/bootstrap && terraform apply`.
 3. Only then merge. Without step 2 the CI deploy fails with `iam:PassRole` access denied.
+
+**Adding a second function (this change):** the deploy role's Lambda and log-group permissions used to cover only the exact name
+`save-order`. They now also cover `save-order-*`, which `save-order-lookup` needs. Apply the bootstrap
+(`cd terraform/bootstrap && terraform apply`, a 1-change plan) **before merging**, or the deploy fails with access denied.
+Your SSO permission set needs no change.
 
 ## Observability
 
@@ -233,11 +265,11 @@ aws cognito-idp admin-delete-user --user-pool-id "$POOL" --username "$EMAIL"
 ## Tests
 
 See the [testing guide](../docs/TESTING.md) for every level, including `./scripts/e2e-test.sh`, which runs the
-API's success and failure cases against the deployed stack and removes its own test data. The Lambda logic has 15 unit tests using Node's built-in runner (no dependencies, Node 22+). The AWS call is
+API's success and failure cases against the deployed stack and removes its own test data. The two Lambdas have 23 unit tests using Node's built-in runner (no dependencies, Node 22+). The AWS call is
 injected, so no AWS access is needed. CI runs them on every pull request.
 
 ```bash
-node --test "src/save-order/*.test.mjs"
+node --test "src/*/*.test.mjs"
 ```
 
 ## AWS account prerequisites (your SSO permission set)
@@ -269,7 +301,7 @@ sed "s/ACCOUNT_ID/$(aws sts get-caller-identity --query Account --output text)/"
   ARNs or IDs, because the repository is public. The full plan is in the step log, where the AWS account ID is masked.
   The role's trust policy checks this repo by immutable owner/repo ID and allows only the `main` branch (plan)
   and the `production` environment (apply). Pull requests cannot assume it.
-- **Packaging is Terraform.** `archive_file` zips `src/save-order`; `apply` updates the Lambda when the code hash
+- **Packaging is Terraform.** `archive_file` zips each function's folder under `src/`; `apply` updates a Lambda when its code hash
   changes. There is no separate `update-function-code` step.
 - **The pipeline cannot change its own permissions.** The deploy role, state bucket and permissions boundary live
   in `terraform/bootstrap`, applied manually. The role can only create IAM roles that carry the boundary

@@ -60,7 +60,7 @@ jobs:
           node-version: '24'
 
       - name: Run Lambda unit tests
-        run: node --test "src/save-order/*.test.mjs"
+        run: node --test "src/*/*.test.mjs"
 
       - name: Fail if state or variable files are committed
         run: |

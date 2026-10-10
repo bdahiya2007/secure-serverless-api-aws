@@ -5,6 +5,17 @@ locals {
   validated     = { for k, r in var.routes : k => r if r.request_schema != null }
   has_validated = length(local.validated) > 0
 
+  # The resource each Lambda route attaches to: its child segment if it has one, else its root path part.
+  route_resource_ids = merge(
+    { for k, r in var.routes : k => aws_api_gateway_resource.this[r.path_part].id },
+    { for k, r in aws_api_gateway_resource.child : k => r.id },
+  )
+
+  # Path used in the Lambda invoke permission: path parameters become wildcards in an execute-api ARN.
+  route_arn_paths = {
+    for k, r in var.routes : k => r.child_path_part == null ? r.path_part : "${r.path_part}/${replace(r.child_path_part, "/\\{[^}]+\\}/", "*")}"
+  }
+
   # One method response per outcome. 404 is produced by the success template through
   # $context.responseOverride.status, so it has no integration response of its own.
   dynamodb_statuses              = ["200", "400", "404", "500"]
@@ -31,6 +42,15 @@ resource "aws_api_gateway_resource" "this" {
   rest_api_id = aws_api_gateway_rest_api.this.id
   parent_id   = aws_api_gateway_rest_api.this.root_resource_id
   path_part   = each.value
+}
+
+# Optional child segment under a route's path part, for example the {orderId} in /orders-via-lambda/{orderId}.
+resource "aws_api_gateway_resource" "child" {
+  for_each = { for k, r in var.routes : k => r if r.child_path_part != null }
+
+  rest_api_id = aws_api_gateway_rest_api.this.id
+  parent_id   = aws_api_gateway_resource.this[each.value.path_part].id
+  path_part   = each.value.child_path_part
 }
 
 # Rejects malformed bodies at the edge, before the Lambda is invoked or billed.
@@ -68,7 +88,7 @@ resource "aws_api_gateway_method" "this" {
   for_each = var.routes
 
   rest_api_id   = aws_api_gateway_rest_api.this.id
-  resource_id   = aws_api_gateway_resource.this[each.value.path_part].id
+  resource_id   = local.route_resource_ids[each.key]
   http_method   = each.value.http_method
   authorization = each.value.authorization_type
   authorizer_id = each.value.authorization_type == "COGNITO_USER_POOLS" ? aws_api_gateway_authorizer.cognito[0].id : null
@@ -81,7 +101,7 @@ resource "aws_api_gateway_integration" "this" {
   for_each = var.routes
 
   rest_api_id = aws_api_gateway_rest_api.this.id
-  resource_id = aws_api_gateway_resource.this[each.value.path_part].id
+  resource_id = local.route_resource_ids[each.key]
   http_method = aws_api_gateway_method.this[each.key].http_method
 
   # Lambda proxy integration: API Gateway always invokes with POST.
@@ -98,7 +118,7 @@ resource "aws_lambda_permission" "this" {
   action        = "lambda:InvokeFunction"
   function_name = each.value.lambda_function_name
   principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_api_gateway_rest_api.this.execution_arn}/${var.stage_name}/${each.value.http_method}/${each.value.path_part}"
+  source_arn    = "${aws_api_gateway_rest_api.this.execution_arn}/${var.stage_name}/${each.value.http_method}/${local.route_arn_paths[each.key]}"
 }
 
 # ---------------------------------------------------------------------------

@@ -48,6 +48,11 @@ output "dashboard_url" {
   value       = module.orders_dashboard.dashboard_url
 }
 
+output "get_order_via_lambda_url" {
+  description = "URL pattern for GET /orders-via-lambda/{orderId} (the Lambda-based read; requires a Cognito ID token)."
+  value       = "${module.orders_api.invoke_url}/orders-via-lambda/{orderId}"
+}
+
 output "get_order_url" {
   description = "URL pattern for GET /orders/{orderId} (direct DynamoDB integration; requires a Cognito ID token)."
   value       = "${module.orders_api.invoke_url}/orders/{orderId}"

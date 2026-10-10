@@ -23,7 +23,9 @@ variable "stage_name" {
 variable "routes" {
   description = <<-EOT
     Routes backed by Lambda proxy integrations, keyed by an alphanumeric name (used as the
-    request model name). Each route is one path segment under the API root plus an HTTP method.
+    request model name). Each route is one path segment under the API root plus an HTTP method, and may add
+    one child segment with child_path_part (for example path_part "orders-via-lambda" and child_path_part
+    "{orderId}" gives /orders-via-lambda/{orderId}).
     authorization_type must be AWS_IAM or COGNITO_USER_POOLS; NONE is rejected. COGNITO_USER_POOLS
     needs cognito_user_pool_arns.
     request_schema is an optional JSON Schema (draft 4) that API Gateway validates before invoking the Lambda.
@@ -35,7 +37,13 @@ variable "routes" {
     lambda_invoke_arn    = string
     authorization_type   = optional(string, "AWS_IAM")
     request_schema       = optional(string)
+    child_path_part      = optional(string)
   }))
+
+  validation {
+    condition     = alltrue([for r in values(var.routes) : r.child_path_part == null || can(regex("^[A-Za-z0-9._{}-]+$", r.child_path_part))])
+    error_message = "child_path_part may contain only letters, numbers, '.', '_', '-' and {braces} for a path parameter."
+  }
 
   validation {
     condition     = alltrue([for k in keys(var.routes) : can(regex("^[a-zA-Z0-9]+$", k))])

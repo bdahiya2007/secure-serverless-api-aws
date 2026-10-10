@@ -9,7 +9,7 @@ name: Deploy Terraform
 #
 # Flow: push to main -> plan (read-only view of the changes) -> manual approval in the
 # `production` environment -> apply exactly that saved plan. Lambda packaging is part of
-# Terraform (archive_file zips src/save-order; apply updates the function when the code
+# Terraform (archive_file zips each src/<function> folder; apply updates a function when its code
 # hash changes), so there is no separate update-function-code step.
 #
 # Required GitHub repository secrets (Settings -> Secrets and variables -> Actions):
