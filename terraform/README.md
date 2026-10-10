@@ -23,6 +23,7 @@ terraform/
 src/save-order/                    # Node.js Lambda code and unit tests
 .github/workflows/                 # validate.yml (PRs, no AWS) and deploy.yml (push to main, OIDC + approval)
 scripts/e2e-test.sh                # end-to-end smoke test with automatic cleanup
+scripts/benchmark/                 # cold-start and memory benchmark (temporary function, cleans up)
 docs/TESTING.md                    # how to test: unit, end-to-end, observability, pipeline, WAF
 docs/permission-set-inline-policy.json   # extra IAM your SSO permission set needs
 ```
@@ -48,7 +49,7 @@ Saves one order item (one row) to the Orders table.
 | Setting | Value |
 |---|---|
 | Runtime | `nodejs24.x` (latest GA; Node.js 26 is still public preview) |
-| Architecture / memory / timeout | `arm64` / 128 MB / 10 s |
+| Architecture / memory / timeout | `arm64` / 512 MB / 10 s (memory chosen from a benchmark, see the root README "Performance") |
 | IAM permissions | `dynamodb:PutItem` on the Orders table ARN only, plus write to its own log group |
 | Logs | Explicit log group, JSON format, 14-day retention |
 | Config | `TABLE_NAME` environment variable (from the table module output) |

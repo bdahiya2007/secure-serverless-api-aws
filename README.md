@@ -82,6 +82,7 @@ terraform/
 └── README.md             # full technical reference and runbook
 src/save-order/           # Lambda source and unit tests
 scripts/e2e-test.sh       # end-to-end smoke test with automatic cleanup
+scripts/benchmark/        # cold-start and memory benchmark (temporary function, cleans up)
 .github/workflows/        # validate.yml and deploy.yml
 docs/                     # TESTING.md and the IAM policy for the engineer's SSO permission set
 ```
@@ -112,6 +113,75 @@ dependencies:
 node --test "src/save-order/*.test.mjs"
 ```
 
+## Performance
+
+The Lambda was tuned from measurements, not assumptions. The brief was to shrink the deployment package and keep
+initialization out of the handler. Both turned out to be already true, and the benchmark showed where the real
+latency was.
+
+**Already in place**
+- **Package: 2,089 bytes zipped** (two source files). The AWS SDK comes from the Lambda runtime and the tests are
+  excluded, so there is almost nothing left to remove.
+- **Initialization is outside the handler.** The DynamoDB client and `TABLE_NAME` are created at module level, once
+  per execution environment, not per request.
+
+**Method.** A temporary copy of the function (same role, `nodejs24.x`, arm64, X-Ray active tracing) was benchmarked
+so production was never touched. The matrix was 3 code variants x 3 memory sizes, with 10 forced cold starts and
+5 warm requests per configuration. Every request was a real DynamoDB write. Timings come from Lambda's own report
+line (`Init Duration` and `Duration`), and a sample counts as cold only if it has an init phase. In all, 135 invocations
+(86 cold, 49 warm); the table shows medians.
+
+| Variant | What it changes |
+|---|---|
+| `baseline` | The production code |
+| `slim-imports` | Low-level DynamoDB client only (drops `lib-dynamodb`) to load fewer modules |
+| `init-warmup` | `slim-imports` plus client timeouts and credentials/region resolved during init |
+
+**Results**
+
+| Variant | Memory | Cold samples | Init (ms) | First request (ms) | **Cold total (ms)** | vs current | Cold p90 (ms) | Warm (ms) | GB-s per cold request |
+|---|---|---|---|---|---|---|---|---|---|
+| baseline (current) | 128 MB | 10 | 308 | 983 | **1,281** | | 1,322 | 70 | 0.160 |
+| slim-imports | 128 MB | 10 | 317 | 973 | **1,290** | +1% | 1,315 | 73 | 0.161 |
+| init-warmup | 128 MB | 10 | 304 | 975 | **1,276** | 0% | 1,330 | 70 | 0.160 |
+| baseline | 256 MB | 10 | 314 | 493 | **814** | -36% | 856 | 26 | 0.204 |
+| slim-imports | 256 MB | 10 | 307 | 485 | **794** | -38% | 815 | 24 | 0.199 |
+| init-warmup | 256 MB | 9 | 294 | 490 | **785** | -39% | 808 | 31 | 0.197 |
+| baseline | **512 MB** | 10 | 269 | 233 | **509** | **-60%** | 561 | **11** | 0.255 |
+| slim-imports | 512 MB | 7 | 259 | 214 | **486** | -62% | 508 | 12 | 0.244 |
+| init-warmup | 512 MB | 10 | 296 | 235 | **532** | -58% | 545 | 11 | 0.267 |
+
+*Cold total = init + first request. Billed duration was about equal to cold total in these runs, so init is billed.*
+
+**What the numbers say**
+- **Code changes did not help.** Slimmer imports and init warm-up are within about 3% of baseline at every memory
+  size, which is inside the run-to-run noise. They were measured, rejected, and not shipped.
+- **Memory is the lever.** At 128 MB the function has almost no CPU, so loading and compiling the SDK dominates the
+  first request. At 512 MB a cold request drops from 1.28 s to 0.51 s and a warm request from 70 ms to 11 ms.
+- **Headroom.** At 128 MB the function peaked at about 102 MB (80% of the limit); 256 MB and 512 MB remove that risk.
+- **Cost stays negligible.** A cold request uses more GB-s at higher memory (0.16 to 0.26), but a *warm* request, the
+  common case, is cheaper: 8.8 mGB-s at 128 MB, 6.5 at 256 MB, 5.5 at 512 MB. Lambda's always-free monthly allowance
+  (1 million requests and 400,000 GB-s, on both arm64 and x86, per the AWS Lambda pricing page) covers the compute
+  for about 1.5 million requests even if every one were a cold start at 512 MB. Requests beyond the first million cost
+  $0.20 per million, so the request count, not memory, is the limit. Initialization is billed as well, which is why cold
+  requests cost more.
+
+**Decision:** memory raised from 128 MB to **512 MB**; code unchanged.
+
+**Limits of this measurement:** about 10 cold samples per configuration, one account and region, run on one day, and
+X-Ray tracing included in the timings. Treat differences of a few percent as noise.
+
+**Reproduce it.** The benchmark creates its own temporary function, never modifies production, and deletes the
+function and its test rows on exit:
+
+```bash
+./scripts/benchmark/run.sh                       # full matrix, about 5 minutes
+MEMORIES="256 512" VARIANTS="baseline" BATCHES=1 ./scripts/benchmark/run.sh   # a smaller run
+```
+
+It needs an AWS session and room for 5 parallel invocations (the account default is 10). Variants live in
+[scripts/benchmark/](scripts/benchmark/README.md).
+
 ## Design decisions
 
 - **REST API, not HTTP API.** The requirement named a REST API, which also provides request validation and
@@ -120,6 +190,8 @@ node --test "src/save-order/*.test.mjs"
   tested without API Gateway.
 - **Node.js 24, not 26.** Node.js 26 is still a Lambda public preview, so the latest generally available runtime
   was used.
+- **512 MB of memory, from a benchmark.** More memory means more CPU, which cut cold starts by 60% and warm requests
+  by 84%; code-level optimizations did not measurably help (see [Performance](#performance)).
 - **Runtime-included AWS SDK.** This avoids an npm build step. AWS recommends bundling the SDK for strict version
   control, which is a listed follow-up.
 - **ID token authorizer.** Simplest correct option for a first version. Scopes and an access-token flow would suit
