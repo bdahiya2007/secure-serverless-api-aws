@@ -120,7 +120,7 @@ request and response with VTL templates in `terraform/environments/dev/templates
 Response: `{ "orderId", "itemCount", "items": [ { "itemId", "quantity", "price", "createdAt" } ] }`.
 
 **Known gap:** orders have no owner, so **any signed-in user can read any order** if they know its ID. Per-user ownership is
-not implemented (see the root README).
+not implemented (see [Known limitations and roadmap](../README.md#known-limitations-and-roadmap) in the root README).
 
 **Limitations and trade-offs:** no pagination (one `Query`, up to 100 items), no list-all (a `Scan` would be unbounded and expose
 every order). Beyond that:
