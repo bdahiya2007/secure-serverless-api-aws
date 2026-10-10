@@ -54,7 +54,7 @@ COMPILED = [(rid, desc, re.compile(rx)) for rid, desc, rx in RULES]
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})")
 
 FORBIDDEN_NAMES = [
-    "*.tfstate", "*.tfstate.*", "*.tfvars", "*.tfvars.json", ".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx",
+    "*.tfstate", "*.tfstate.*", "*.tfvars", "*.tfvars.json", "tfplan", "*.tfplan", ".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx",
     "*.ppk", "id_rsa*", "id_ed25519*", "*credentials*", ".terraformrc", "terraform.rc",
 ]
 FORBIDDEN_DIRS = (".terraform/", ".aws/", ".ssh/")
@@ -194,7 +194,7 @@ def self_test():
         "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", "Table Orders on-demand", "1,281 ms cold start",
         "/home/runner/work/repo", "version = \"6.67.0\"", "x = 1.2.3.4", "secret-scan: allow " + j(["AKIA", "ABCDEFGHIJKLMNOP"]),
     ]
-    names_bad = ["terraform.tfstate", "a/b/prod.tfvars", ".env", "k.pem", "terraform/.terraform/providers/x", "aws-credentials.json"]
+    names_bad = ["tfplan", "x/prod.tfplan", "terraform.tfstate", "a/b/prod.tfvars", ".env", "k.pem", "terraform/.terraform/providers/x", "aws-credentials.json"]
     names_good = [".terraform.lock.hcl", "terraform/environments/dev/main.tf", "README.md"]
     failures = []
     for rid, sample in bad.items():
