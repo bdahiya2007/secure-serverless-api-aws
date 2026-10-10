@@ -50,3 +50,6 @@ Thumbs.db
 
 # --- Terraform Lambda build output ---
 .build/
+
+# --- Local-only tracking files (a private working list, never pushed) ---
+TODO.md
