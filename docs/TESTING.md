@@ -43,7 +43,7 @@ CI runs both of these, plus the unit tests, on every pull request.
 ./scripts/e2e-test.sh
 ```
 
-It creates a temporary Cognito user, calls `POST /orders` for six cases, prints PASS or FAIL for each, and
+It creates a temporary Cognito user, calls `POST /orders` and `GET /orders/{orderId}` (the direct DynamoDB integration) for eleven cases, prints PASS or FAIL for each, and
 **always deletes the user and the order rows afterwards** (an `EXIT` trap, so cleanup also runs if a check
 fails). The exit code is non-zero if any case fails. Expected output:
 
@@ -54,8 +54,13 @@ fails). The exit code is non-zero if any case fails. Expected output:
   PASS  access token instead of ID token                     HTTP 401
   PASS  missing orderId and an extra field                   HTTP 400
   PASS  malformed JSON                                       HTTP 400
+  PASS  read the order back (200, item present)              HTTP 200
+  PASS  read keeps numbers as numbers                        HTTP 200
+  PASS  unknown order                                        HTTP 404
+  PASS  id with a quote is handled safely                    HTTP 404
+  PASS  read without a token                                 HTTP 401
 
-Result: 6 passed, 0 failed
+Result: 11 passed, 0 failed
 Cleaning up...
   Orders rows left:  0
   Cognito users left: 0
@@ -96,7 +101,21 @@ call -H "Authorization: $TOK" -d '{"orderId":"t-1","itemId":"i-1","quantity":2,"
 | `call -H "Authorization: $TOK" -d '{"itemId":"i-1","extra":1}'` | **400** `Invalid request body`, rejected by API Gateway before the Lambda runs |
 | `call -H "Authorization: $TOK" -d '{not json'` | **400** |
 
-Check the item was stored:
+Read the order back. This request goes from API Gateway straight to DynamoDB; no Lambda runs:
+
+```bash
+curl -sS -H "Authorization: $TOK" "$URL/t-1"                       # 200 with the items
+curl -sS -o /dev/null -w '%{http_code}\n' -H "Authorization: $TOK" "$URL/no-such-order"   # 404
+curl -sS -o /dev/null -w '%{http_code}\n' "$URL/t-1"              # 401 (no token)
+```
+
+Expected body for a stored order (missing `quantity` or `price` appear as `null`):
+
+```json
+{ "orderId": "t-1", "itemCount": 1, "items": [ { "itemId": "i-1", "quantity": 2, "price": 9.99, "createdAt": "…" } ] }
+```
+
+Check the item was stored directly in the table:
 
 ```bash
 aws dynamodb get-item --table-name Orders --key '{"orderId":{"S":"t-1"},"itemId":{"S":"i-1"}}'
@@ -155,7 +174,10 @@ about a minute. Note that a push to `main` also removes the WAF, because `deploy
 | Symptom | Likely cause and fix |
 |---|---|
 | `401` on a request that should be valid | The ID token lasts 60 minutes: sign in again. Also check you sent the **ID** token, not the access token. |
-| `403 Missing Authentication Token` | Wrong URL or stage. Use `terraform output -raw create_order_url` exactly. |
+| `403 Missing Authentication Token` | Wrong URL or stage. Use `terraform output -raw create_order_url` exactly (for reads, append `/<orderId>`). |
+| `404 {"message": "Order not found"}` on a `GET` | There are no items for that `orderId`. Check spelling and the table. A hostile or odd id also gives 404, never a 500. |
+| `500 {"message":"Internal error"}` on a `GET` | DynamoDB or the integration role failed. Check that the `save-order-api-read-role` role exists and still allows `dynamodb:Query` on the table. |
+| `415 Unsupported Media Type` on a `GET` | A request sent a content type the template does not accept (`passthrough_behavior = NEVER`). Use `application/json` or no body. |
 | `400 {"message": "Invalid request body"}` (note the space) | API Gateway's schema check: a field is missing, wrong, or extra. |
 | `400` with an `errors` list | The Lambda's own validation, with the reasons. |
 | `429` | The 5 requests per second throttle. Slow down. |
@@ -164,4 +186,5 @@ about a minute. Note that a push to `main` also removes the WAF, because `deploy
 | `The security token included in the request is expired` (AWS CLI) | Run `aws sso login` again. |
 | Dashboard looks empty | Metrics lag by a minute or two, and the default time range may not include your calls. |
 | `node --test` finds no tests | Use the quoted glob: `node --test "src/save-order/*.test.mjs"`. |
+| `iam:PassRole` access denied when deploying | A direct integration needs the permission set and the CI deploy role to pass roles to `apigateway.amazonaws.com`. See "Reading orders" in [terraform/README.md](../terraform/README.md). |
 | A test user is still in the pool | Delete it by its `Username` from `list-users`; see the cleanup note in section 3. |

@@ -16,7 +16,8 @@ terraform/
 └── modules/
     ├── dynamodb-table/            # reusable, validated DynamoDB table module
     ├── lambda-function/           # Lambda + least-privilege IAM role + log group (+ boundary, X-Ray)
-    ├── rest-api/                  # REST API: Lambda proxy routes, validation, throttling, Cognito authorizer
+    ├── rest-api/                  # REST API: Lambda proxy routes, direct DynamoDB routes, validation, throttling, Cognito authorizer
+    ├── apigw-dynamodb-role/       # read-only role API Gateway assumes to query one DynamoDB table
     ├── cognito-user-pool/         # Cognito user pool + public app client
     ├── waf-rate-limit/            # optional WAF per-IP rate limit (billed; off by default)
     └── cloudwatch-dashboard/      # API Gateway Count/4XXError, Lambda Invocations/Errors
@@ -94,6 +95,38 @@ aws lambda invoke --function-name save-order \
 | Not enabled | Access logs (needs an account-wide CloudWatch role), caching, CORS, custom domain, X-Ray on the API stage. WAF is available but **off by default** (see below). |
 
 Cost: REST API requests are about $3.50 per million. There is no charge while idle.
+
+## Reading orders: direct DynamoDB integration (`GET /orders/{orderId}`)
+
+Reads do not use Lambda. API Gateway calls DynamoDB itself (an AWS service integration, `Query`) and maps the
+request and response with VTL templates in `terraform/environments/dev/templates/`.
+
+| Setting | Value |
+|---|---|
+| Method | `GET /orders/{orderId}`, same Cognito authorizer as `POST /orders` |
+| DynamoDB call | `Query` on the Orders table, strongly consistent (a client reads back what it just wrote), at most 100 items |
+| Request template | `get-order.request.vtl`: puts the path parameter into `ExpressionAttributeValues` as a string value (never into the query expression) and escapes it for JSON |
+| Response template | `get-order.response.vtl`: turns DynamoDB's typed attributes into plain JSON, `null` for missing `quantity`/`price`, and sets **404** (through `$context.responseOverride.status`) when the order has no items |
+| Errors | DynamoDB 4xx and 5xx become fixed `{"message":"Bad request"}` and `{"message":"Internal error"}` bodies; nothing from DynamoDB is passed through |
+| Unmatched content types | Rejected (`passthrough_behavior = NEVER`) |
+| Role | `save-order-api-read-role`: `dynamodb:Query` on the Orders table only. The `apigw-dynamodb-role` module rejects write actions and wildcards, and the role carries the pipeline's permissions boundary. |
+| Timeout | 5 seconds |
+
+Response: `{ "orderId", "itemCount", "items": [ { "itemId", "quantity", "price", "createdAt" } ] }`.
+
+**Known gap:** orders have no owner, so **any signed-in user can read any order** if they know its ID. Per-user ownership is
+not implemented (see the root README).
+
+**Limits:** no pagination (one `Query`, up to 100 items), no list-all (a `Scan` would be unbounded and expose every order),
+and the VTL templates have no unit tests. They were checked against a real DynamoDB table on a scratch API, and
+`scripts/e2e-test.sh` covers the read cases against the deployed stack.
+
+**Before merging a change like this, update IAM (one-time, manual).** API Gateway checks `iam:PassRole` when a method is
+given an integration role, and by default your SSO permission set and the CI deploy role may only pass roles to Lambda.
+1. Update the permission set with [docs/permission-set-inline-policy.json](../docs/permission-set-inline-policy.json)
+   (its pass-role statement now also allows `apigateway.amazonaws.com`), reprovision the account and run `aws sso login`.
+2. Apply the bootstrap, which updates the deploy role the same way: `cd terraform/bootstrap && terraform apply`.
+3. Only then merge. Without step 2 the CI deploy fails with `iam:PassRole` access denied.
 
 ## Observability
 

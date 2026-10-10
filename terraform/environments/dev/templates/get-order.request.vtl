@@ -1,0 +1,13 @@
+## Request mapping template: GET /orders/{orderId} -> DynamoDB Query
+## The path parameter is a string VALUE in ExpressionAttributeValues, never part of the expression, and is
+## escaped for JSON. escapeJavaScript turns ' into \' (invalid JSON), so that is undone.
+#set($orderId = $util.escapeJavaScript($input.params('orderId')).replaceAll("\\'", "'"))
+{
+  "TableName": "__TABLE_NAME__",
+  "KeyConditionExpression": "orderId = :orderId",
+  "ExpressionAttributeValues": {
+    ":orderId": { "S": "$orderId" }
+  },
+  "ConsistentRead": true,
+  "Limit": 100
+}

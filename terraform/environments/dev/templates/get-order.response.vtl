@@ -1,0 +1,29 @@
+## Response mapping template: DynamoDB Query result -> client JSON
+## Turns DynamoDB's typed attributes ({"S": ...}, {"N": ...}) into plain JSON. No items means the order does
+## not exist, so the status is overridden to 404. Optional attributes (quantity, price) become null when absent.
+#set($count = $input.path('$.Count'))
+#if($count == 0)
+#set($context.responseOverride.status = 404)
+{"message": "Order not found"}
+#else
+#set($orderId = $util.escapeJavaScript($input.params('orderId')).replaceAll("\\'", "'"))
+{
+  "orderId": "$orderId",
+  "itemCount": $count,
+  "items": [
+#foreach($item in $input.path('$.Items'))
+#set($itemId = $util.escapeJavaScript($item.itemId.S).replaceAll("\\'", "'"))
+#set($createdAt = $util.escapeJavaScript($item.createdAt.S).replaceAll("\\'", "'"))
+## A missing attribute renders as an empty string, which is "true" in #if, so capture each value as a string and compare.
+#set($quantity = "$!{item.quantity.N}")
+#set($price = "$!{item.price.N}")
+    {
+      "itemId": "$itemId",
+      "quantity": #if($quantity != "")$quantity#{else}null#end,
+      "price": #if($price != "")$price#{else}null#end,
+      "createdAt": "$createdAt"
+    }#if($foreach.hasNext),#end
+#end
+  ]
+}
+#end
