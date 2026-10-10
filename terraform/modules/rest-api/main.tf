@@ -11,6 +11,12 @@ locals {
     { for k, r in aws_api_gateway_resource.child : k => r.id },
   )
 
+  # Path parameters of a Lambda route's child segment, e.g. ["orderId"] for {orderId}. They must be declared on the
+  # method and used as cache keys, or a cached response for one id could be served for another.
+  route_path_parameters = {
+    for k, r in var.routes : k => r.child_path_part == null ? [] : flatten(regexall("\\{([^}]+)\\}", r.child_path_part))
+  }
+
   # Path used in the Lambda invoke permission: path parameters become wildcards in an execute-api ARN.
   route_arn_paths = {
     for k, r in var.routes : k => r.child_path_part == null ? r.path_part : "${r.path_part}/${replace(r.child_path_part, "/\\{[^}]+\\}/", "*")}"
@@ -95,6 +101,7 @@ resource "aws_api_gateway_method" "this" {
 
   request_validator_id = each.value.request_schema != null ? aws_api_gateway_request_validator.body[0].id : null
   request_models       = each.value.request_schema != null ? { "application/json" = aws_api_gateway_model.this[each.key].name } : {}
+  request_parameters   = { for p in local.route_path_parameters[each.key] : "method.request.path.${p}" => true }
 }
 
 resource "aws_api_gateway_integration" "this" {
@@ -108,6 +115,10 @@ resource "aws_api_gateway_integration" "this" {
   type                    = "AWS_PROXY"
   integration_http_method = "POST"
   uri                     = each.value.lambda_invoke_arn
+
+  # Cache entries are keyed by the path parameters, so each id is cached separately.
+  cache_key_parameters = [for p in local.route_path_parameters[each.key] : "method.request.path.${p}"]
+  cache_namespace      = each.key
 }
 
 # Only this API, this stage, this method and this path may invoke the function.
@@ -162,6 +173,10 @@ resource "aws_api_gateway_integration" "dynamodb" {
   passthrough_behavior = "NEVER"
   request_templates    = { "application/json" = each.value.request_template }
   timeout_milliseconds = 5000
+
+  # Cache entries are keyed by the path parameters, so each id is cached separately.
+  cache_key_parameters = [for p in each.value.path_parameters : "method.request.path.${p}"]
+  cache_namespace      = each.key
 }
 
 resource "aws_api_gateway_method_response" "dynamodb" {
@@ -199,7 +214,7 @@ resource "aws_api_gateway_deployment" "this" {
   # plan time) instead of whole resource objects avoids a spurious redeploy after the
   # first apply, when provider-filled defaults change the objects.
   triggers = {
-    redeployment = sha1(jsonencode([var.routes, var.cognito_user_pool_arns, var.dynamodb_routes]))
+    redeployment = sha1(jsonencode([var.routes, var.cognito_user_pool_arns, var.dynamodb_routes, var.cache_enabled, var.cache_size_gb, var.cache_ttl_seconds, "cache-keys-v1"]))
   }
 
   lifecycle {
@@ -218,6 +233,10 @@ resource "aws_api_gateway_stage" "this" {
   deployment_id = aws_api_gateway_deployment.this.id
   stage_name    = var.stage_name
 
+  # Off by default. A stage cache is billed by the hour even when idle.
+  cache_cluster_enabled = var.cache_enabled
+  cache_cluster_size    = var.cache_enabled ? var.cache_size_gb : null
+
   tags = var.tags
 }
 
@@ -231,5 +250,13 @@ resource "aws_api_gateway_method_settings" "all" {
   settings {
     throttling_rate_limit  = var.throttling_rate_limit
     throttling_burst_limit = var.throttling_burst_limit
+
+    # Only GET methods are cached by API Gateway. Cached data is encrypted, and a client cannot bypass the cache or force
+    # a backend call by sending Cache-Control: max-age=0 (the header is ignored), which would otherwise let anyone skip
+    # the cache at the backend's expense.
+    caching_enabled                            = var.cache_enabled
+    cache_ttl_in_seconds                       = var.cache_ttl_seconds
+    cache_data_encrypted                       = true
+    unauthorized_cache_control_header_strategy = "SUCCEED_WITHOUT_RESPONSE_HEADER"
   }
 }

@@ -78,6 +78,7 @@ free AWS-published data. Anything billed is off by default and documented:
 |---|---|---|
 | AWS WAF per-IP rate limit | About $6/month while attached, billed hourly | Off (`enable_waf`) |
 | DynamoDB point-in-time recovery | Per GB stored | Off |
+| API Gateway stage cache (300 s TTL) | Billed by the hour even when idle (not free-tier eligible) | Off (`enable_api_cache`); reads can be stale for up to the TTL when on |
 | REST API requests | About $3.50 per million | On, pennies at this scale |
 
 ## Repository layout

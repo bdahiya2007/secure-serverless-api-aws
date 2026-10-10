@@ -30,6 +30,10 @@ on:
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
     inputs:
+      enable_api_cache:
+        description: 'Provision the API Gateway stage cache (BILLED by the hour, about $0.02 for 0.5 GB; reads can be stale for up to 300 s). Leaving this false REMOVES a cache that was enabled earlier.'
+        type: boolean
+        default: false
       enable_waf:
         description: 'Attach the WAF rate limit (COSTS about $6/month while attached). Leaving this false REMOVES a WAF that was enabled earlier.'
         type: boolean
@@ -44,6 +48,7 @@ env:
   TF_IN_AUTOMATION: 'true'
   TF_INPUT: '0'
   TF_VAR_enable_waf: ${{ inputs.enable_waf || 'false' }}
+  TF_VAR_enable_api_cache: ${{ inputs.enable_api_cache || 'false' }}
   WORKDIR: terraform/environments/dev
 
 jobs:

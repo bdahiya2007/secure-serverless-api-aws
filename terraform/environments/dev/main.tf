@@ -106,6 +106,10 @@ module "orders_api" {
 
   cognito_user_pool_arns = [module.orders_user_pool.user_pool_arn]
 
+  # Optional and OFF by default: a stage cache is billed hourly even when idle.
+  cache_enabled     = var.enable_api_cache
+  cache_ttl_seconds = var.api_cache_ttl_seconds
+
   routes = {
     CreateOrder = {
       path_part            = "orders"

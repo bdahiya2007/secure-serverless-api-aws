@@ -23,6 +23,11 @@ output "stage_arn" {
   value       = aws_api_gateway_stage.this.arn
 }
 
+output "cache_enabled" {
+  description = "Whether the (billed) stage cache is provisioned."
+  value       = var.cache_enabled
+}
+
 output "api_name" {
   description = "Name of the REST API (the ApiName metric dimension)."
   value       = aws_api_gateway_rest_api.this.name

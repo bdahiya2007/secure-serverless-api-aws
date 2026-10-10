@@ -159,6 +159,30 @@ path equally. It prints a Markdown table and always removes its temporary user a
 so compare the paths with each other, not with a browser. Results and what they mean are in the
 [optimization guide](OPTIMIZATION_GUIDE.md).
 
+### With the API cache on (optional, billed)
+
+Turn it on only for a short test (see [terraform/README.md](../terraform/README.md#api-gateway-stage-cache-optional-billed-off-by-default)).
+After about 4 minutes, with `$TOK` and `$URL` set as in section 3B:
+
+```bash
+BASE=${URL%/orders}
+# 1. Hits: repeated reads of one order are served from the cache. CacheHitCount rises in CloudWatch (namespace AWS/ApiGateway).
+for i in 1 2 3; do curl -s -o /dev/null -w '%{time_total}\n' -H "Authorization: $TOK" "$BASE/orders/t-1"; done
+
+# 2. Ids must not be mixed up: two different orders must return two different bodies, whatever is cached.
+curl -s -H "Authorization: $TOK" "$BASE/orders/t-1" | head -c 120; echo
+curl -s -H "Authorization: $TOK" "$BASE/orders/t-2" | head -c 120; echo
+
+# 3. Stale read: add an item to an order that was just read, then read it again within the TTL.
+curl -s -X POST "$URL" -H "Content-Type: application/json" -H "Authorization: $TOK" -d '{"orderId":"t-1","itemId":"i-9"}'
+curl -s -H "Authorization: $TOK" "$BASE/orders/t-1" | grep -o '"itemCount": *[0-9]*'     # the old count until the TTL expires
+
+# Flush the cache to see the new data at once
+aws apigateway flush-stage-cache --rest-api-id "$(terraform -chdir=terraform/environments/dev output -raw rest_api_id)" --stage-name dev
+```
+
+Turn the cache off again afterwards (`terraform apply` without the variable) and confirm `terraform output api_cache_enabled` is `false`.
+
 ## 4. Check observability
 
 After a few calls:
@@ -209,6 +233,7 @@ about a minute. Note that a push to `main` also removes the WAF, because `deploy
 | `Backend initialization required` | Run `terraform init -reconfigure -backend-config="bucket=$(terraform -chdir=../../bootstrap output -raw state_bucket)"`. |
 | `The security token included in the request is expired` (AWS CLI) | Run `aws sso login` again. |
 | Dashboard looks empty | Metrics lag by a minute or two, and the default time range may not include your calls. |
+| A read shows old data right after a write | The API cache is on and its TTL has not expired (up to 300 s). Flush it, or turn the cache off. |
 | `node --test` finds no tests | Use the quoted glob: `node --test "src/*/*.test.mjs"`. |
 | `400 {"message":"Invalid order id",...}` on `/orders-via-lambda/...` | The id failed the Lambda's allow-list (letters, numbers, `.`, `_`, `-`, 1 to 128 characters). The direct read would return 404 for the same id. |
 | `iam:PassRole` access denied when deploying | A direct integration needs the permission set and the CI deploy role to pass roles to `apigateway.amazonaws.com`. See "Reading orders" in [terraform/README.md](../terraform/README.md). |
