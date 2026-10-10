@@ -3,8 +3,8 @@
 #   API_DOMAIN=api.example.com scripts/demo/multi-region-checks.sh
 # 1 health route in both regions   2 a token from the one Cognito pool is accepted by the second region's API
 # 3 replication primary -> second region and back, with the lag   4 a write conflict on one item (last writer wins)
-# 5 the custom domain answers (which region?)   6 optional failover simulation (SIMULATE_FAILOVER=1): the primary
-#   region's health check is INVERTED (forced to fail), DNS moves to the other region, and it is always put back on exit.
+# 5 the custom domain answers (which region?)   6 optional failover simulation (SIMULATE_FAILOVER=1): the health check of the
+#   region that is answering is INVERTED (forced to fail), DNS moves to the other region, then it is put back (always restored on exit).
 # Creates one temporary Cognito user and order rows (deleted on exit). Needs: AWS credentials, terraform, curl, dig, openssl,
 # python3. Cost: a few hundred API requests.
 set -uo pipefail
@@ -18,7 +18,7 @@ P_REGION=$(aws configure get region 2>/dev/null || echo us-east-1); P_REGION=${A
 D_REGION=$(echo "$D_BASE" | sed 's/.*execute-api\.\([a-z0-9-]*\)\.amazonaws.*/\1/')
 HC=$(terraform output -json multi_region_health_check_ids)
 RUN=$(openssl rand -hex 3); EMAIL="mr-$RUN@example.com"; PW="Aa1!$(openssl rand -hex 12)"; PFX="mr-$RUN"
-revert_hc() { local id; id=$(echo "$HC" | python3 -c "import sys,json; print(json.load(sys.stdin).get('$P_REGION',''))"); [ -n "$id" ] && aws route53 update-health-check --health-check-id "$id" --no-inverted >/dev/null 2>&1; }
+revert_hc() { for id in $(echo "$HC" | python3 -c "import sys,json; print(' '.join(json.load(sys.stdin).values()))"); do aws route53 update-health-check --health-check-id "$id" --no-inverted >/dev/null 2>&1; done; }
 cleanup() {
   revert_hc
   python3 - "$PFX" <<'PY'
@@ -60,14 +60,18 @@ echo "GET https://$API_DOMAIN/health -> $(curl -s -m 10 "https://$API_DOMAIN/hea
 echo "authenticated read through the domain: quantity $(qty "https://$API_DOMAIN" "$PFX-A")"
 
 if [ "${SIMULATE_FAILOVER:-0}" = 1 ]; then
-  echo; echo "== 6 failover simulation: force the $P_REGION health check to FAIL (inverted); it is restored on exit"
-  PID=$(echo "$HC" | python3 -c "import sys,json; print(json.load(sys.stdin)['$P_REGION'])")
-  aws route53 update-health-check --health-check-id "$PID" --inverted >/dev/null; t0=$SECONDS
-  for i in $(seq 1 40); do
-    r=$(curl -s -m 10 "https://$API_DOMAIN/health" | python3 -c "import sys,json
+  # Fail the region that is answering now (the nearest one), so DNS has to move to the other. Both checks are restored on exit.
+  answering() { curl -s -m 10 "https://$API_DOMAIN/health" | python3 -c "import sys,json
 try: print(json.load(sys.stdin).get('region','?'))
-except Exception: print('?')")
-    echo "  +$((SECONDS-t0))s answered by: $r"; [ "$r" = "$D_REGION" ] && { echo "  failed over to $D_REGION after about $((SECONDS-t0))s"; break; }; sleep 10
+except Exception: print('?')"; }
+  FROM=$(answering); TO=$D_REGION; [ "$FROM" = "$D_REGION" ] && TO=$P_REGION
+  echo; echo "== 6 failover simulation: $FROM is answering; force its health check to FAIL (inverted); restored on exit"
+  PID=$(echo "$HC" | python3 -c "import sys,json; print(json.load(sys.stdin)['$FROM'])")
+  aws route53 update-health-check --health-check-id "$PID" --inverted >/dev/null; t0=$SECONDS
+  for i in $(seq 1 60); do
+    r=$(answering); echo "  +$((SECONDS-t0))s answered by: $r"
+    [ "$r" = "$TO" ] && { echo "  failed over from $FROM to $TO after about $((SECONDS-t0))s"; break; }; sleep 10
   done
-  revert_hc; echo "health check restored"
+  echo "  restoring the health check..."; revert_hc
+  t1=$SECONDS; for i in $(seq 1 60); do r=$(answering); [ "$r" = "$FROM" ] && { echo "  back on $FROM after about $((SECONDS-t1))s"; break; }; sleep 10; done
 fi

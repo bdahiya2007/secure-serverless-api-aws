@@ -117,7 +117,7 @@ scripts/compare-reads.sh  # interleaved latency comparison: direct read vs Lambd
 scripts/demo/             # behaviour checks for the cache, DAX, WAF and multi-region demos (see docs/DEMO_RESULTS.md)
 scripts/build-dax-package.sh  # builds the read Lambda package with the DAX client (only for the optional DAX switch)
 .github/workflows/        # validate.yml and deploy.yml
-docs/                     # TESTING.md, SECRET_SCANNING.md, OPTIMIZATION_GUIDE.md, DEMO_RESULTS.md (cache, DAX and WAF demo) and the IAM policy for the engineer's SSO permission set
+docs/                     # TESTING.md, SECRET_SCANNING.md, OPTIMIZATION_GUIDE.md, DEMO_RESULTS.md (cache, DAX, WAF and multi-region demos), DISASTER_RECOVERY.md and the IAM policy for the engineer's SSO permission set
 ```
 
 ## Try it
@@ -325,6 +325,7 @@ What this project does not do, why, and what comes next. When something ships, i
 |---|---|---|
 | **Per-user ownership of orders** | **Any signed-in user can read any order by its id.** Orders record no owner, and if the API cache is on, cached responses are shared between users. | Needs the caller's Cognito id stored on each order, reads filtered by it on both read paths, and the cache keyed by identity or skipped. It touches the Lambdas, the data model and the API, so it is a separate piece of work. **The most important next step.** |
 | **Pagination and a truncation signal** | A read returns at most 100 items. The Lambda read reports `"truncated": true`; the direct read cuts off silently, so a client cannot tell. | A small template change for the flag; pagination needs a continuation token in the API. |
+| **Production sign-in and failover depth** | With multi-region on, sign-in depends on one us-east-1 Cognito pool, and the failover health check only proves API Gateway is up (not DynamoDB or Lambda). There is no backup (point-in-time recovery is off). | Both pools trusted by both APIs with a federated identity provider, a deeper health check and point-in-time recovery; see [DISASTER_RECOVERY.md](docs/DISASTER_RECOVERY.md#known-gaps-and-what-to-do-before-relying-on-this). Needs an identity provider choice. |
 | **Alarms** | Nothing notifies anyone of errors or throttling; there is a dashboard only. The dashboard does not yet chart the read Lambda and routes. | CloudWatch alarms (the first 10 are free) with email notification. |
 | **API access logs** | Reads leave no Lambda logs, no X-Ray trace and no access log, which limits auditing. | Needs an account-wide API Gateway CloudWatch role and has a small cost, so it needs a decision first. |
 
@@ -333,7 +334,7 @@ What this project does not do, why, and what comes next. When something ships, i
 | Feature | State |
 |---|---|
 | **API Gateway stage cache** (`enable_api_cache`) and **DAX** (`enable_dax`) | **Off by default** because they bill by the hour and make reads stale for up to their TTL. Measured in a demo: the cache saved about 6 to 7% on repeated reads, DAX saved nothing (see Performance and [DEMO_RESULTS](docs/DEMO_RESULTS.md)). |
-| **Multi-region active/active** (`enable_multi_region`) | Built, not yet applied live. Orders becomes a DynamoDB global table with a replica in `us-west-2`, a second API stack runs there, and Route 53 latency routing with health checks sends each client to the nearest healthy region at one custom name. Off by default because it bills and needs a domain; applied locally for a short demo. See [the runbook](terraform/README.md#multi-region-active-active-global-table-optional-billed-off-by-default). |
+| **Multi-region active/active** (`enable_multi_region`) | Built and demonstrated live (20 minutes, a few cents), then switched off. Orders becomes a DynamoDB global table with a replica in `us-west-2`, a second API stack runs there, and Route 53 latency routing with health checks sends each client to the nearest healthy region at one custom name. Off by default because it bills and needs a domain; applied locally for a short demo. Measured: replication 0.3 to 1.2 s, cross-region sign-in works, a forced failover moved traffic in 31 s (a real one takes about 1.5 to 3 minutes), conflicting writes resolve to the last writer. See [DISASTER_RECOVERY.md](docs/DISASTER_RECOVERY.md), [DEMO_RESULTS.md](docs/DEMO_RESULTS.md) and [the runbook](terraform/README.md#multi-region-active-active-global-table-optional-billed-off-by-default). |
 | **WAF per-IP rate limit** (`enable_waf`) | Off by default (about $6 a month). Applied and tested live in the demo: it blocked a burst from one IP (enforcement lags the limit). Worth enabling for real traffic. |
 
 ### Out of scope on purpose
