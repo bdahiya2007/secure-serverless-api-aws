@@ -1,4 +1,4 @@
-# Demo results: WAF, API cache and DAX switched on, then off
+# Demo results: WAF, API cache, DAX and multi-region switched on, then off
 
 On 2026-10-10 the three optional features (all off by default) were switched on one phase at a time on the deployed stack
 (`us-east-1`), measured, and switched off again. This page records what was measured, what it cost and what it means.
@@ -137,6 +137,41 @@ Behaviour with the API cache in front of DAX:
 - DAX reads took 325 to 904 ms with spikes; repeated reads were not faster. The first request after the change took 419 ms this
   time (the earlier 2.9 s was a VPC cold start).
 
+## Second demo: multi-region active/active (global table), 2026-10-10
+
+`enable_multi_region` on (replica in `us-west-2`, a second API stack there, a custom domain and certificate per region, Route 53 latency records
+with two health checks), measured with `scripts/demo/multi-region-checks.sh`, then switched off. The design is in the
+[runbook](../terraform/README.md#multi-region-active-active-global-table-optional-billed-off-by-default) and the recovery objectives in
+[DISASTER_RECOVERY.md](DISASTER_RECOVERY.md). The domain used is the owner's own and is not recorded here.
+
+| Check | Result |
+|---|---|
+| Apply | Replica `ACTIVE`, 2 HTTPS health checks (healthy within about a minute), 2 latency records. Existing records in the zone (apex, `www`, validation records) unchanged. No drift |
+| Health route (no token) | Each region returns `{"status":"ok","region":"..."}` |
+| Cross-region sign-in | **Works.** A valid token from the one us-east-1 pool on the us-west-2 API got 404 (accepted, order not found); no token got 401 |
+| Replication lag, 10 writes each way (client-side, including the polling read) | us-east-1 to us-west-2: 473 to 1,186 ms, median about 860 ms. us-west-2 to us-east-1: 328 to 1,227 ms, median about 800 ms. CloudWatch `ReplicationLatency`: average 569 ms, maximum 903 ms |
+| Conflict: the same item written in both regions at once (quantity 10 and 20) | After 8 s both regions showed 20. **Last writer wins; the other write was lost silently** |
+| Custom domain | Answered over HTTPS with a free certificate per region; from this client it resolved to us-west-2 (the nearest); an authenticated read through it worked |
+| Failover, forced (the answering region's health check inverted) | The domain answered from the other region after **about 31 s** (polled every 10 s) |
+| Data cleanup | 0 order rows in both regions, 0 test users |
+
+How to read the numbers:
+- **The 31 s is not a recovery time.** Inverting a health check flips its status at once, so it excludes detection. A real failure needs three failed 30 s checks (about
+  90 s) plus up to 60 s of DNS caching: roughly **1.5 to 3 minutes**. The failback reading ("back after 0 s") was unreliable and is not reported.
+- The replication figures include the cost of the polling read itself (a Lambda call), so true replication is a little quicker than the client-side numbers.
+- One client, one run, one failure type. Not a load test.
+
+**What went wrong on the way.** The first apply stopped while creating the replica with `UnrecognizedClientException: The security token included in the request is invalid`
+(in us-west-2), after the custom domain had taken about a minute. Nothing billable existed yet. After a fresh `ssologin` the same apply completed; the likely cause is the SSO
+session expiring during a long apply (not confirmed). **Run `ssologin` before a long apply.** Separately, my first failover step inverted the primary's health check although the
+other region was the one answering, so it would have shown no change; the script now fails whichever region is answering.
+
+**Cost.** The setup was on for about 20 minutes (replica, second stack and two health checks). A few cents, estimated from list prices; the bill had not been read, and the
+Route 53 health check price (roughly $1 to $2 each per month, prorated) was not verified. Idle, the health checks alone would be a few dollars a month, which is why it is off by default.
+
+**Shutdown verified** after a plain `terraform apply`: `multi_region_enabled` false; no replica and no `Orders` table in us-west-2; no health checks; no certificates, custom domains,
+APIs or Lambdas in us-west-2; no `-dr` IAM roles; the zone back to its original records; the existing website returning 200; `terraform plan` showing no changes.
+
 ## Shutdown (End) verified
 
 After the final `terraform apply` with no variables (about 20:10 UTC), a check found: `waf_enabled`, `api_cache_enabled` and `dax_enabled`
@@ -173,6 +208,7 @@ each apply; do the End step when finished. The scripts create throw-away users a
 | 2: API cache | `terraform apply -var enable_api_cache=true` (about 4 minutes) | `scripts/demo/cache-checks.sh`, `ROUNDS=100 ./scripts/compare-reads.sh` |
 | 3: WAF | `terraform apply -var enable_api_cache=true -var enable_waf=true` | `scripts/demo/waf-checks.sh 300`, then wait about 5 minutes for the block to clear |
 | 4: all on | `./scripts/build-dax-package.sh`, then `terraform apply -var enable_api_cache=true -var enable_waf=true -var enable_dax=true -var waf_rate_limit=2000` | `scripts/demo/cache-checks.sh`, `scripts/demo/dax-checks.sh`, `ROUNDS=100 ./scripts/compare-reads.sh` |
+| Multi-region (second demo) | `ssologin`, then `terraform apply -var enable_multi_region=true -var multi_region_domain=api.example.com -var route53_zone_name=example.com` (an existing hosted zone is needed) | `API_DOMAIN=api.example.com scripts/demo/multi-region-checks.sh`, then with `SIMULATE_FAILOVER=1`; remove with `terraform apply` |
 | End | `terraform apply` (no variables) | `terraform output` must show `waf_enabled`, `api_cache_enabled` and `dax_enabled` as `false` |
 
 Notes: phase 1 was run with the API cache off, which is why its DAX result is clean; in phase 4 the "direct read" in

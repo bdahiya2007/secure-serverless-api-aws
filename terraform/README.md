@@ -328,7 +328,7 @@ nearest healthy region at one name. Either region can take reads and writes, and
 | Second stack | `save-order-dr`, `save-order-lookup-dr`, `save-order-api-read-role-dr` and an API with the same routes, each reading and writing its **own region's** replica. IAM names are global, hence the suffix (still inside the `save-order-*` scope). Same permissions boundary, 512 MB, X-Ray, throttling. The WAF rate limit is attached to the second API too when `enable_waf` is on. |
 | Names | A regional custom domain with a free ACM certificate in **each** region; Route 53 holds two latency alias records for the one name, each with a health check. Only records for that one name and the certificate validation are added; **existing records are never changed**. |
 | Health route | `GET /health` on each API: no token (a checker has none), answered by API Gateway itself (a MOCK integration; no Lambda or DynamoDB call) and returns `{"status":"ok","region":"..."}`. It shows that the regional API Gateway is up, **not** that DynamoDB or Lambda work. |
-| Sign-in | **One Cognito user pool, in the primary region.** The second API validates tokens against it. Users are not replicated, so new sign-ins depend on the primary region; tokens already issued keep working in the second region while the primary is down. (Cross-region validation is verified in the demo step 2, not assumed.) |
+| Sign-in | **One Cognito user pool, in the primary region.** The second API validates tokens against it. Users are not replicated, so new sign-ins depend on the primary region; tokens already issued keep working in the second region while the primary is down. **Verified in the demo:** the second region's API accepted a token from the primary-region pool (404 for a missing order; 401 without a token). For production see [DISASTER_RECOVERY.md](../docs/DISASTER_RECOVERY.md). | |
 | Permissions | Bootstrap: the permissions boundary now also covers the second region's table and Lambda log groups (apply the bootstrap once, a one-resource change). The demo is applied **locally**; the deploy role has no second-region, Route 53 or ACM access, and `deploy.yml` stops with a clear message if the setup is still in the state. |
 
 ```bash
@@ -354,7 +354,10 @@ The hosted zone is already paid for by the existing site.
 - **Replication is asynchronous**, usually about a second. A read in the other region right after a write there can miss it, and **strongly
   consistent reads only apply inside one region**. Do not read-after-write across regions.
 - **DNS failover is not instant.** The health check needs about 90 s (three 30 s checks) to fail, and clients keep the old answer until the 60 s
-  alias TTL ends, so expect roughly 1 to 3 minutes. Clients that cache DNS longer take longer.
+  alias TTL ends, so expect roughly 1.5 to 3 minutes for a real failure. A *forced* failure (inverting a check) moved the domain in 31 s in the demo, because
+  it skips detection. Clients that cache DNS longer take longer.
+- **Measured replication lag** was 0.3 to 1.2 s in both directions (CloudWatch `ReplicationLatency`: average 569 ms, maximum 903 ms). A conflicting write to the
+  same item in both regions converged to the later write everywhere; the other was lost.
 - **The health route is shallow**: a region with a broken Lambda or table still looks healthy. A deeper check would call a real read.
 - **Shared fate for sign-in** (one user pool) and for the stack's definition (one Terraform state).
 - **Cross-region cost and compliance:** orders now live in two regions; check data-residency rules before using real data.

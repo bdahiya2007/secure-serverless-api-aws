@@ -259,15 +259,15 @@ What the script checks, and what to expect:
 | Step | Expect |
 |---|---|
 | 1 `GET /health` on both regional APIs | `{"status":"ok","region":"..."}` from each |
-| 2 A token from the one Cognito pool used on the second region's API | no token 401; valid token **404** (accepted, order not found). A 401 with a valid token means cross-region tokens are not accepted |
+| 2 A token from the one Cognito pool used on the second region's API | no token 401; valid token **404** (accepted, order not found). A 401 with a valid token means cross-region tokens are not accepted. **Observed: 404, accepted** |
 | 3 Replication both ways | an order written in one region is read in the other, normally within a few seconds; the script prints the lag |
 | 4 The same item written in both regions at once | after a few seconds both regions show the **same** quantity (last writer wins; the other write is lost) |
 | 5 The custom domain | DNS answers, `/health` returns a region, an authenticated read works |
-| 6 (`SIMULATE_FAILOVER=1`) The primary's health check is forced to fail | the domain starts answering from the second region after roughly 1 to 3 minutes; the check is restored when the script ends |
+| 6 (`SIMULATE_FAILOVER=1`) The health check of the region that is answering is forced to fail | the domain answers from the other region within about 30 s for a forced failure (a real failure takes about 1.5 to 3 minutes: detection plus DNS caching); the checks are restored when the script ends |
 
-It creates one temporary Cognito user and order rows and removes them on exit (deletes replicate). Step 6 changes only the health check's
-inverted flag, never real resources. If the script is killed, restore it with `aws route53 update-health-check --health-check-id <id> --no-inverted`
-(the ids are in `terraform output multi_region_health_check_ids`).
+It creates one temporary Cognito user and order rows and removes them on exit (deletes replicate). Step 6 changes only the health checks'
+inverted flag, never real resources, and restores all of them on exit. If the script is killed, restore them with `aws route53 update-health-check --health-check-id <id> --no-inverted`
+(the ids are in `terraform output multi_region_health_check_ids`). The expected values and what they mean for recovery time are in [DISASTER_RECOVERY.md](DISASTER_RECOVERY.md).
 
 Also verify after removal: no `Orders` replica (`aws dynamodb describe-table --table-name Orders --query Table.Replicas`), no Route 53 health checks, and the
 existing site's records are unchanged. A push to `main` also refuses to run while the setup is on (`deploy.yml` stops with a message).
