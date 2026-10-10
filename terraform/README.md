@@ -126,8 +126,8 @@ every order). Beyond that:
   was cut off (DynamoDB's continuation marker is dropped).
 - **Less visibility:** no Lambda logs, no X-Ray trace and no API access logs for reads; only API Gateway's `Count` and `4XXError`
   metrics show them. Errors are deliberately generic, which protects against information leaks but makes failures harder to diagnose.
-- **Not faster:** measured about as fast as the Lambda path (median 353 ms against 327 ms for the Lambda write, mostly network),
-  so the benefit is no Lambda to run or pay for, not latency.
+- **Not faster:** measured **30 to 40 ms slower** than the same read through a Lambda (medians 377 against 338 ms, and 352 against
+  322 ms, in two interleaved runs). The benefit is no Lambda to run or pay for (about $0.25 per million requests), not latency.
 - **Cost:** the strongly consistent read uses twice the read units of an eventually consistent one (about $0.06 more per million
   reads); API Gateway at $3.50 per million dominates.
 The VTL templates have no unit tests. They were checked against a real DynamoDB table on a scratch API, and
@@ -155,9 +155,12 @@ The same read, done by a Lambda, so the two styles can be compared like for like
 | Response JSON | Pretty-printed by the template | Compact |
 | Logs and traces | None | Lambda logs and X-Ray traces |
 | Unit-testable | No (VTL) | Yes |
-| Cold start | None | Yes (about 0.5 s at 512 MB) |
+| Cold start | None | Yes: init 330 ms plus a 252 ms first request, about 0.58 s, once per environment |
+| Median latency (interleaved, warm) | 377 ms and 352 ms | **338 ms and 322 ms** (about 30 to 40 ms faster) |
+| Cost per million reads | about $3.63 | about $3.87 |
 
-Run `./scripts/compare-reads.sh` to compare their latency (requests are interleaved, so network drift affects both equally).
+Run `./scripts/compare-reads.sh` to repeat the latency comparison (requests are interleaved, so network drift affects both equally).
+The measured results and what they mean are in the [optimization guide](../docs/OPTIMIZATION_GUIDE.md#33-direct-read-against-lambda-read-like-for-like).
 
 **Before merging a change like this, update IAM (one-time, manual).** API Gateway checks `iam:PassRole` when a method is
 given an integration role, and by default your SSO permission set and the CI deploy role may only pass roles to Lambda.
