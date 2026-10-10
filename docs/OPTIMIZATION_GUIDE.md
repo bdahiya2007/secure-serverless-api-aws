@@ -38,8 +38,8 @@ Environments are reused for minutes, then retired.
 | **Init warm-up and client timeouts** | Moves credential/region resolution into the boosted-CPU init phase; fails fast on hangs | Slow first-request work that can move earlier, or hangs are costly | The gain is inside the noise | No gain; rejected |
 | **Bundle and minify** (esbuild) | One small file, pinned SDK, often faster cold start | You need a pinned SDK or have many dependencies | You want no build tooling | **Not measured**; runtime SDK chosen on purpose |
 | **Provisioned concurrency** | No cold starts: environments stay initialized | A strict latency target with steady traffic | Cost matters (it bills continuously, even when idle) | **Not used or measured** |
-| **DAX** (DynamoDB Accelerator) | Serves repeated reads from memory in microseconds instead of single-digit milliseconds | Many repeated reads of hot items, the DynamoDB call is a large share of the latency, and slightly stale reads are acceptable | The reads must be strongly consistent (DAX does not cache those), the call is already a few milliseconds inside a larger request, or cost matters | Built behind a switch, **off by default**; expected to save about 1% here; not yet measured |
-| **API Gateway stage cache** | A cache hit skips the backend (Lambda or DynamoDB) | Reads of the same item repeat, and slightly old data is acceptable | Reads must reflect the latest write, results differ per user, or ids rarely repeat | Built behind a switch, **off by default**; not yet measured |
+| **DAX** (DynamoDB Accelerator) | Serves repeated reads from memory in microseconds instead of single-digit milliseconds | Many repeated reads of hot items, the DynamoDB call is a large share of the latency, and slightly stale reads are acceptable | The reads must be strongly consistent (DAX does not cache those), the call is already a few milliseconds inside a larger request, or cost matters | Built behind a switch, **off by default**; measured: **no gain** (322 ms with and without), cold start 0.58 s to 2.2 s, see section 3.4 |
+| **API Gateway stage cache** | A cache hit skips the backend (Lambda or DynamoDB) | Reads of the same item repeat, and slightly old data is acceptable | Reads must reflect the latest write, results differ per user, or ids rarely repeat | Built behind a switch, **off by default**; measured: about 21 to 23 ms (6 to 7%) faster on repeated reads, see section 3.4 |
 | **Direct service integration** | One fewer service in the path; no function to run or pay for | The request is pure data mapping (key lookup, simple query) | You need validation, rules, branching or complex logic | Used for one read path; measured **30 to 40 ms slower** than the same read via Lambda, but about $0.25 per million cheaper and one fewer function to run |
 
 ## 3. Measurements
@@ -145,6 +145,28 @@ gap. The explanation for the difference is an informed guess, not a measurement.
 
 To repeat the earlier single-path measurement, sign in as in [TESTING.md](TESTING.md) and time requests with `curl -w '%{time_total}\n'`.
 
+### 3.4 DAX, API cache and WAF (demo, 2026-10-10)
+
+Each feature was switched on in turn and measured with `./scripts/compare-reads.sh` (100 interleaved rounds). Medians, in ms:
+
+| Phase | Floor | Direct read | Lambda read | Lambda minus direct |
+|---|---|---|---|---|
+| 0: everything off | 273 | 352 | 322 | -29 |
+| 1: DAX on | 273 | 348 | 322 | -26 |
+| 2: API cache on | 272 | 331 | 299 | -32 |
+| 4: cache, DAX and WAF on | 282 | 344 | 313 | -31 |
+
+- **DAX: no measurable gain.** The function takes about 6 ms, so there is almost nothing to save. The cold start grew from 0.58 s
+  to 2.2 s (VPC and DAX connection), and reads were stale (and empty ones cached) for the 60 s TTL.
+- **API cache: about 21 to 23 ms (6 to 7%) faster** on repeated reads of one id (167 hits to 4 misses in CloudWatch). Unique ids
+  always miss. Reads were stale for up to 300 s after a write, 404s were cached, and a flush takes about 50 s.
+- **Both together** were within noise of the cache alone; with the cache in front, DAX's TTL is hidden behind the cache's 300 s.
+- **WAF:** a burst from one IP was blocked after about 231 requests (limit 100), because rate rules are enforced with a delay; the
+  block held for about 5 minutes. Blocked requests never reach the authorizer, cache or Lambda.
+- **Cost of the demo:** roughly $0.10 to $0.15; about $0.07 per hour with all three on.
+
+Full results, behaviour checks and limits of the measurement: [DEMO_RESULTS.md](DEMO_RESULTS.md).
+
 ## 4. Cost
 
 Prices checked October 2026, `us-east-1`: API Gateway REST **$3.50 per million requests** (the free tier is for new
@@ -210,7 +232,7 @@ allowance is reached first.
 
 | Risk | How it is handled here | Residual |
 |---|---|---|
-| **Stale and empty results** | Query TTL is 60 s, the cluster is off by default, and the docs state it | Writes do not invalidate cached queries, and an empty result is cached too, so a read right after a write can be wrong for up to the TTL |
+| **Stale and empty results** | Query TTL is 60 s, the cluster is off by default, and the docs state it | Writes do not invalidate cached queries, and an empty result is cached too, so a read right after a write can be wrong for up to the TTL. **Confirmed in the demo** (stale list, cached 404) |
 | **Reads lose the read-your-writes guarantee** | Only the read Lambda uses DAX, and only while the switch is on | Strongly consistent reads cannot be cached, so DAX forces eventually consistent reads |
 | **Who can reach the cluster** | A security group allows only the Lambda, on the encrypted port; the cluster is encrypted at rest and clients use TLS | Anyone with the Lambda's network position and `dax:Query` could read cached orders |
 | **Over-broad roles** | The DAX service role is read-only on one table, the Lambda role has `dax:Query` on one cluster, and both sit under the permissions boundary | The boundary now also allows VPC network interface actions on `*` (an AWS limitation) |
@@ -222,7 +244,7 @@ allowance is reached first.
 
 | Risk | How it is handled here | Residual |
 |---|---|---|
-| **Stale data** | TTL is 300 s, the requested value, and the cache is off by default | Writes do not invalidate it, so a read can show old data for up to the TTL, which undoes the read-your-writes guarantee |
+| **Stale data** | TTL is 300 s, the requested value, and the cache is off by default | Writes do not invalidate it, so a read can show old data for up to the TTL, which undoes the read-your-writes guarantee. **Confirmed in the demo**, including cached 404s; a flush takes about 50 s |
 | **One id's response served for another** | The `orderId` path parameter is set as the cache key on each integration; a test step checks two orders return different bodies | A future route that forgets a cache key would share one entry |
 | **Responses shared between users** | Acceptable today, because any signed-in user can already read any order | **Blocks per-user ownership**: the key would need the caller's identity, or caching must be skipped |
 | **Cache bypass to force backend load** | `Cache-Control: max-age=0` is ignored | Unique ids always miss the cache |
@@ -265,6 +287,5 @@ allowance is reached first.
 ## 8. Not evaluated
 
 esbuild bundling, provisioned concurrency, an HTTP API instead of a REST API (a different feature set and price), an
-eventually consistent read without DAX, and the measured effect of DAX and of the API cache (both are built behind switches that default to off,
-and a time-boxed demo would measure them). (A Lambda-based read of the same data now exists for the like-for-like latency comparison; see
+eventually consistent read without DAX, and the cache with many distinct ids (the demo repeated reads of one order, the best case). (A Lambda-based read of the same data now exists for the like-for-like latency comparison; see
 section 3.3.)

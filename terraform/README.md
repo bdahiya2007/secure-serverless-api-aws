@@ -231,9 +231,9 @@ terraform output dax_enabled                       # must print false
   reads straight to DynamoDB without caching them. That is why the switch also makes the read eventually consistent.
 - **Stale and empty results.** DAX caches `Query` results for the TTL and does **not** invalidate them when an item is written (our writes go straight to
   DynamoDB, and even writes through DAX do not refresh the query cache). It also caches an empty result. After a `POST`, a read can show the old list, or "not found", for up to
-  `dax_query_ttl_seconds`.
+  `dax_query_ttl_seconds`. **Confirmed in the demo:** a cached one-item order stayed one item after a second POST, and a cached 404 stayed 404 after the order was created.
 - **Little to gain here.** The read function runs in about 6 ms in total, including its DynamoDB call, in a request of about 320 ms that is mostly network, so DAX can save
-  at most a few milliseconds (about 1%). Whether it does is what the demo measures.
+  at most a few milliseconds (about 1%). **Measured: it saved nothing** (Lambda read median 322 ms with and without DAX), and the cold start grew from about 0.58 s to 2.2 s.
 - **More moving parts:** a VPC, security groups, an endpoint, a bundled dependency and a larger package. X-Ray traces from the function are unavailable while it is in the VPC unless an X-Ray endpoint is added (not done).
 - **The pipeline cannot manage it.** The CI deploy role has no DAX or EC2 permissions, so apply and remove it locally. `deploy.yml` stops with a clear message if DAX is still in the
   state, so turn it off locally first.
@@ -265,12 +265,12 @@ terraform output api_cache_enabled              # check it is false when you are
 
 **Trade-offs, read before turning it on:**
 - **Stale reads.** Writes do not invalidate the cache. After a `POST`, a `GET` of the same order can return the old result for up to the TTL
-  (300 s). This **undoes the read-your-writes guarantee** the reads were built with (`ConsistentRead`), and an empty result may be cached too
-  (not verified). Flush it with `aws apigateway flush-stage-cache --rest-api-id <id> --stage-name dev`.
+  (300 s). This **undoes the read-your-writes guarantee** the reads were built with (`ConsistentRead`), and **404s are cached too** (confirmed in the demo: an order created after a 404 kept returning 404). Flush it with
+  `aws apigateway flush-stage-cache --rest-api-id <id> --stage-name dev`; **the flush takes about 50 s to take effect**, so a read a few seconds later can still be stale.
 - **Responses are shared between signed-in users.** That matches today's behaviour (any signed-in user can read any order), but it is a
   **blocker for per-user ownership**: the cache would need the caller's identity in its key, or caching must be skipped.
-- **Only repeated reads of the same order benefit.** A cache hit skips the backend (an estimated 30 to 45 ms), but the network round trip
-  (about 275 ms in measurements) remains. Unique ids never hit.
+- **Only repeated reads of the same order benefit.** A cache hit skips the backend; measured gain was about 21 to 23 ms (6 to 7%) on a roughly 320 ms request, because the network round trip
+  (about 275 ms) remains. Unique ids never hit.
 - Watch `CacheHitCount` and `CacheMissCount` (CloudWatch, namespace `AWS/ApiGateway`, dimensions `ApiName` and `Stage`) to see whether it is working.
 
 See [TESTING.md](../docs/TESTING.md) for the steps to verify it (hit, stale read, and a check that ids are not mixed up) and the
@@ -288,17 +288,18 @@ $0.008 per hour, which exceeds the $5 budget if left on. Only enable it to demon
 
 ```bash
 cd terraform/environments/dev
-terraform apply -var enable_waf=true     # create (billing starts)
+terraform apply -var enable_waf=true     # create (billing starts). Repeat any other switch you want kept, or it is removed
 terraform apply                           # remove: re-apply WITHOUT the variable
 terraform output waf_enabled              # check it is false when you are done
 ```
 
 Demonstrate the block (no credentials needed; WAF runs before the authorizer). Expect 401/429 at first,
-then 403 once the limit is exceeded (WAF enforcement can lag by about a minute):
+then 403 once the limit is exceeded. **Enforcement lags**: in the demo, 231 requests got through (3 per second for about 80 s) before the first 403,
+and the IP stayed blocked for about 5 minutes after the last request, including for valid requests (the rule is per IP). Use 300 requests, not 250, to see it:
 
 ```bash
 URL=$(terraform output -raw create_order_url)
-for i in $(seq 1 250); do curl -s -o /dev/null -w "%{http_code}\n" -X POST "$URL" -d '{}'; done | sort | uniq -c
+for i in $(seq 1 300); do curl -s -o /dev/null -w "%{http_code}\n" -X POST "$URL" -d '{}'; done | sort | uniq -c
 ```
 
 Not enabled (each costs extra): WAF logging, managed rule groups, Bot Control, CAPTCHA.

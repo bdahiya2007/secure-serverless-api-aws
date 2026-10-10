@@ -98,9 +98,10 @@ scripts/e2e-test.sh       # end-to-end smoke test with automatic cleanup
 scripts/secret-scan.py    # secret and sensitive-data scanner (pre-commit hook and CI)
 scripts/benchmark/        # cold-start and memory benchmark (temporary function, cleans up)
 scripts/compare-reads.sh  # interleaved latency comparison: direct read vs Lambda read (cleans up)
+scripts/demo/             # behaviour checks for the cache, DAX and WAF demo (see docs/DEMO_RESULTS.md)
 scripts/build-dax-package.sh  # builds the read Lambda package with the DAX client (only for the optional DAX switch)
 .github/workflows/        # validate.yml and deploy.yml
-docs/                     # TESTING.md, SECRET_SCANNING.md, OPTIMIZATION_GUIDE.md and the IAM policy for the engineer's SSO permission set
+docs/                     # TESTING.md, SECRET_SCANNING.md, OPTIMIZATION_GUIDE.md, DEMO_RESULTS.md (cache, DAX and WAF demo) and the IAM policy for the engineer's SSO permission set
 ```
 
 ## Try it
@@ -226,14 +227,24 @@ $0.25 per million requests and a function to run, and it has no Lambda cold star
 environment). The Lambda read also validates ids, flags truncation, and leaves logs and traces. Why the direct integration is
 slower is an informed guess, not a measurement; see the [optimization guide](docs/OPTIMIZATION_GUIDE.md#33-direct-read-against-lambda-read-like-for-like).
 
-### Caching options (built, off by default, not yet measured)
+### Caching options and WAF (built, off by default, measured in a demo)
 
-Two further speed-ups are built behind switches that default to **off**: an **API Gateway stage cache** (`enable_api_cache`, 300 s TTL)
-and a **DAX cluster** for the read Lambda (`enable_dax`, 60 s TTL). Both bill by the hour with no free tier (about $0.02 and $0.05 per hour), and both
-make reads **stale for up to their TTL after a write**. DAX also cannot cache the strongly consistent read this API uses, so enabling it makes the read
-eventually consistent. From the measurements above, DAX could save only a few milliseconds of a roughly 320 ms request (the function takes about 6 ms in
-total), while the API cache could save the backend's share on repeated reads. Neither has been run on AWS yet; a short, time-boxed demo would measure them.
-The costs, the stale-read behaviour and the risks are in the [optimization guide](docs/OPTIMIZATION_GUIDE.md) and the
+Three features are built behind switches that default to **off**: an **API Gateway stage cache** (`enable_api_cache`, 300 s TTL), a **DAX
+cluster** for the read Lambda (`enable_dax`, 60 s TTL) and a **WAF per-IP rate limit** (`enable_waf`). On 2026-10-10 each was switched
+on in turn, measured against a baseline and switched off again (the whole demo cost roughly $0.10 to $0.15):
+
+| Setup | Lambda read median | Direct read median | Verdict |
+|---|---|---|---|
+| Everything off (baseline) | 322 ms | 352 ms | |
+| DAX on | 322 ms | 348 ms | **No gain**; cold start 0.58 s to 2.2 s; stale and cached-empty results for 60 s |
+| API cache on | 299 ms | 331 ms | **About 21 to 23 ms (6 to 7%) faster** on repeated reads; stale for up to 300 s; 404s cached |
+| WAF on | n/a | n/a | Blocked a single IP after about 231 requests (limit 100; enforcement lags) for about 5 minutes |
+| All three on | 313 ms | 344 ms | Within noise of the cache alone |
+
+About 270 ms of every figure is network and TLS from the test client, and the Lambda itself runs in about 6 ms, so there is little
+for DAX to save. The API cache helps only repeated reads of the same id. Both make reads stale after a write, and a cache flush takes
+about 50 s to take effect. The full per-phase results, behaviour checks and costs are in [docs/DEMO_RESULTS.md](docs/DEMO_RESULTS.md); the
+risks are in the [optimization guide](docs/OPTIMIZATION_GUIDE.md) and the
 [runbook](terraform/README.md#dynamodb-accelerator-dax-optional-billed-off-by-default).
 
 ### Cost and security trade-offs
@@ -305,8 +316,8 @@ What this project does not do, why, and what comes next. When something ships, i
 
 | Feature | State |
 |---|---|
-| **API Gateway stage cache** (`enable_api_cache`) and **DAX** (`enable_dax`) | Implemented and tested at plan level, **off by default** because they bill by the hour and make reads stale for up to their TTL. **Not yet measured on AWS**; a short, time-boxed demo would measure them (see Performance). |
-| **WAF per-IP rate limit** (`enable_waf`) | Implemented, off by default (about $6 a month), and never applied live. |
+| **API Gateway stage cache** (`enable_api_cache`) and **DAX** (`enable_dax`) | **Off by default** because they bill by the hour and make reads stale for up to their TTL. Measured in a demo: the cache saved about 6 to 7% on repeated reads, DAX saved nothing (see Performance and [DEMO_RESULTS](docs/DEMO_RESULTS.md)). |
+| **WAF per-IP rate limit** (`enable_waf`) | Off by default (about $6 a month). Applied and tested live in the demo: it blocked a burst from one IP (enforcement lags the limit). Worth enabling for real traffic. |
 
 ### Out of scope on purpose
 
