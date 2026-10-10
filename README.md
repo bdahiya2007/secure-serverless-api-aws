@@ -206,16 +206,27 @@ Measured end to end from one client (30 requests per path, a new TCP and TLS con
 | `GET /orders/{id}`, direct DynamoDB integration (no Lambda) | 353 ms | 374 ms |
 | `POST /orders`, Lambda (512 MB) plus DynamoDB write | 327 ms | 339 ms |
 
-The network round trip dominates (the 401 row is already 274 ms). The direct read was **not faster** than the Lambda path: it
-adds about 79 ms over the gateway floor against about 53 ms for the Lambda write, though the two do different work (a
-strongly consistent `Query` against a `PutItem`), so this is not a like-for-like comparison. Its benefit is no Lambda to run or
-pay for and no Lambda cold start, not speed.
+The network round trip dominates (the 401 row is already 274 ms), and that table compares a read with a write, so it is only
+indicative. A **like-for-like comparison** followed once the same read also existed as a Lambda. Two interleaved runs against
+the deployed API (`./scripts/compare-reads.sh`; 50 and 100 rounds per path, a new connection per request):
+
+| Path | Run A median | Run A p90 | Run B median | Run B p90 |
+|---|---|---|---|---|
+| API Gateway only (401, no backend) | 291 ms | 323 ms | 276 ms | 291 ms |
+| `GET /orders/{id}`: direct DynamoDB integration | 377 ms | 456 ms | 352 ms | 382 ms |
+| `GET /orders-via-lambda/{id}`: Lambda + DynamoDB | **338 ms** | 380 ms | **322 ms** | 342 ms |
+
+**The Lambda read was faster, by about 30 to 40 ms at the median, in both runs**, even though it adds a hop: the function itself
+runs in about 6 ms, and most of the extra time is API Gateway invoking it. The direct read is not faster; what it saves is about
+$0.25 per million requests and a function to run, and it has no Lambda cold start (the Lambda read pays about 0.58 s once per
+environment). The Lambda read also validates ids, flags truncation, and leaves logs and traces. Why the direct integration is
+slower is an informed guess, not a measurement; see the [optimization guide](docs/OPTIMIZATION_GUIDE.md#33-direct-read-against-lambda-read-like-for-like).
 
 ### Cost and security trade-offs
 
 - **Cost:** API Gateway at about **$3.50 per million requests** is 80 to 96% of any request's cost, so Lambda tuning moves
-  cents. Per million requests: a Lambda write about $4.40, a direct read about $3.63 (a Lambda read would be about
-  $3.90). 512 MB makes warm requests cheaper but cold ones about 59% dearer in compute. Provisioned concurrency, which
+  cents. Per million requests: a Lambda write about $4.40, a direct read about $3.63 (the same read via a Lambda about
+  $3.87). 512 MB makes warm requests cheaper but cold ones about 59% dearer in compute. Provisioned concurrency, which
   removes cold starts, would cost about $5.40 per month for one 512 MB environment, even when idle. The API Gateway free
   tier does not apply to this account.
 - **Security:** the main risks are request data leaking through module-level state (kept out by design), template
@@ -248,8 +259,9 @@ It needs an AWS session and room for 5 parallel invocations (the account default
   `scripts/compare-reads.sh` runs the like-for-like comparison.
 - **Lambda proxy integration for writes, direct DynamoDB integration for reads.** Writes use a Lambda so the contract
   and validation live in code that can be unit-tested. Reads need no logic beyond mapping, so API Gateway calls
-  DynamoDB itself: no Lambda to run, patch or pay for, and no Lambda cold start. It was **not measurably faster** (see
-  [Request latency](#request-latency)). The trade-offs are that VTL templates have no unit tests (they are verified end
+  DynamoDB itself: no Lambda to run, patch or pay for, and no Lambda cold start. It was measured **30 to 40 ms slower** than
+  the same read through a Lambda (see [Request latency](#request-latency)), so the choice is cost and simplicity against speed
+  and features. The trade-offs are that VTL templates have no unit tests (they are verified end
   to end), reads are limited to 100 items per order and silently truncated beyond that, reads leave no Lambda logs or
   X-Ray traces, and the response shape is coupled to DynamoDB's typed JSON through the template.
 - **Node.js 24, not 26.** Node.js 26 is still a Lambda public preview, so the latest generally available runtime

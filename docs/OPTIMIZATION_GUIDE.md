@@ -14,7 +14,7 @@ and security. Everything here was measured on this project unless it says "not m
 | Is initialization in the right place? | Yes: the client and config are created once per environment, outside the handler. |
 | What was actually slow? | A **cold request: about 1.28 s** at 128 MB (init 308 ms plus a 983 ms first request). Warm: about 70 ms. |
 | What fixed it? | **Memory (CPU)**: 512 MB gives about 0.51 s cold and 11 ms warm. Code-level tuning did nothing measurable. |
-| Is the direct DynamoDB read faster? | **Not in our first measurement** (against a Lambda *write*). The same read now also exists as a Lambda (`GET /orders-via-lambda/{orderId}`), so a like-for-like comparison is possible with `./scripts/compare-reads.sh`; see section 3.3. |
+| Is the direct DynamoDB read faster? | **No: it was about 30 to 40 ms slower** than the same read done by a Lambda, in two interleaved runs (section 3.3). It does save about $0.25 per million requests and removes a function to run, but it adds no speed. |
 | Where does the money go? | **API Gateway: about $3.50 per million requests**, about 80 to 96% of the cost of any request. Lambda tuning saves cents. |
 
 ## 1. Cold and warm requests
@@ -38,7 +38,7 @@ Environments are reused for minutes, then retired.
 | **Init warm-up and client timeouts** | Moves credential/region resolution into the boosted-CPU init phase; fails fast on hangs | Slow first-request work that can move earlier, or hangs are costly | The gain is inside the noise | No gain; rejected |
 | **Bundle and minify** (esbuild) | One small file, pinned SDK, often faster cold start | You need a pinned SDK or have many dependencies | You want no build tooling | **Not measured**; runtime SDK chosen on purpose |
 | **Provisioned concurrency** | No cold starts: environments stay initialized | A strict latency target with steady traffic | Cost matters (it bills continuously, even when idle) | **Not used or measured** |
-| **Direct service integration** | One fewer service in the path; no function to run or pay for | The request is pure data mapping (key lookup, simple query) | You need validation, rules, branching or complex logic | Used for one read path; the same read also exists as a Lambda for comparison |
+| **Direct service integration** | One fewer service in the path; no function to run or pay for | The request is pure data mapping (key lookup, simple query) | You need validation, rules, branching or complex logic | Used for one read path; measured **30 to 40 ms slower** than the same read via Lambda, but about $0.25 per million cheaper and one fewer function to run |
 
 ## 3. Measurements
 
@@ -70,10 +70,10 @@ connection per request**, timing the total request. The function was warm.
 **How to read it**
 - **The network dominates.** The 401 row (no backend work at all) is already 274 ms, mostly the round trip, TCP and TLS setup.
   What each backend adds on top is small: about **+79 ms** for the direct read and **+53 ms** for the Lambda write.
-- **The direct read was not faster.** The two paths do different work (a strongly consistent `Query` plus template
-  processing, against a `PutItem`), so this is not a like-for-like comparison. What it does show is that **removing the Lambda
-  did not buy lower latency here**. An earlier version of the README claimed "lower latency"; that claim was unmeasured and
-  has been corrected.
+- **The direct read was not faster than the Lambda write.** The two paths do different work (a strongly consistent `Query`
+  plus template processing, against a `PutItem`), so this was only indicative. The like-for-like comparison in section 3.3
+  confirms it and goes further: the same read through a Lambda is faster. An earlier version of the README claimed "lower
+  latency" for the direct read; that claim was unmeasured and has been corrected.
 - **The real advantages of the direct read** are no Lambda cold start, no function to run, patch or pay for, and fewer moving parts.
 - The comparison above is against a Lambda *write*, which does different work. For a fair answer, see section 3.3.
 - Not measured: a client in the same region, and cold-start behaviour of the direct read (it has none of Lambda's, but API
@@ -97,8 +97,49 @@ gateway-only request **interleaved** (so network drift affects each equally), af
 temporary data afterwards. The first Lambda request after a deploy is a cold start and is deliberately excluded from the warm
 numbers; its cost is the cold-start figure in section 3.1.
 
-**Results:** the first run happens after this route is deployed, and the numbers are added here and to the README then.
-Until then, treat the earlier comparison against a Lambda write as indicative only.
+**Results** (two runs of `./scripts/compare-reads.sh` on the deployed API; times are client-side totals, with a new connection
+per request, in ms):
+
+| Run | Path | n | Median | p90 | Max | Over gateway floor |
+|---|---|---|---|---|---|---|
+| A (50 rounds) | API Gateway only (401, no backend) | 50 | 291 ms | 323 ms | 370 ms | |
+| | `GET /orders/{id}`: direct DynamoDB integration | 50 | 377 ms | 456 ms | 1,194 ms | +86 ms |
+| | `GET /orders-via-lambda/{id}`: Lambda + DynamoDB | 50 | **338 ms** | 380 ms | 626 ms | +47 ms |
+| B (100 rounds) | API Gateway only (401, no backend) | 100 | 276 ms | 291 ms | 501 ms | |
+| | `GET /orders/{id}`: direct DynamoDB integration | 100 | 352 ms | 382 ms | 592 ms | +76 ms |
+| | `GET /orders-via-lambda/{id}`: Lambda + DynamoDB | 100 | **322 ms** | 342 ms | 491 ms | +46 ms |
+
+**The Lambda read was faster in both runs: about 40 ms at the median in run A and about 30 ms in run B**, and its p90 and worst
+case were better. Across 150 interleaved samples per path this is a consistent difference, not noise. Interleaving means any
+network drift hit both paths equally.
+
+Where the time goes, from the Lambda's own timing reports (163 warm invocations):
+- The function itself ran in **6.1 ms at the median** (p90 9.4 ms, billed 7 ms, memory used 115 MB of 512 MB). So most of the
+  Lambda path's extra time over the gateway floor (about 46 ms) is API Gateway invoking the function, not the function.
+- The direct integration cost about 30 to 40 ms *more* than that. Likely reasons, **not verified here**: API Gateway signs and
+  sends the DynamoDB request using the integration role and renders the VTL templates, while a warm Lambda keeps a connection to
+  DynamoDB inside AWS.
+- **Cold start:** the Lambda read has one once per environment: init 330 ms plus a 252 ms first request, about **0.58 s**. The
+  direct read has none of Lambda's. With steady traffic this is rare; with sporadic traffic the first request after idle pays it.
+  These warm figures exclude it.
+
+**What this means**
+
+| | Direct integration | Lambda read |
+|---|---|---|
+| Median latency | ~30 to 40 ms slower | faster |
+| Cold start | none | about 0.58 s, once per environment |
+| Cost per million reads | about $3.63 | about $3.87 (+$0.25) |
+| Validation, truncation flag, logs, traces, unit tests | no | yes |
+| Moving parts | API Gateway and a role | plus a function and its role |
+
+Choose the **Lambda read** when latency, observability or logic matter (validation, ownership checks, pagination). Choose the
+**direct integration** when the read is pure mapping and you want the least to run and pay for, and 30 to 40 ms does not matter.
+At this project's scale the $0.25 per million is negligible (about one cent per 40,000 requests); the other differences decide it.
+
+**Limits:** one client and network path, two runs, new connection per request (so absolute numbers include TCP and TLS setup),
+small items, and a strongly consistent `Query` on both sides. A client in `us-east-1`, or larger responses, could change the
+gap. The explanation for the difference is an informed guess, not a measurement.
 
 To repeat the earlier single-path measurement, sign in as in [TESTING.md](TESTING.md) and time requests with `curl -w '%{time_total}\n'`.
 
@@ -116,10 +157,10 @@ accounts only, so it does not apply here); DynamoDB on-demand **$0.625 per milli
 |---|---|---|---|---|
 | Write via Lambda, warm, 512 MB (about 11 ms billed) | $3.50 | $0.625 | $0.27 | **$4.40** |
 | Read, direct integration (strongly consistent, small order) | $3.50 | $0.125 | none | **$3.63** |
-| The same read via a Lambda (built as `/orders-via-lambda`; cost computed, not billed) | $3.50 | $0.125 | $0.27 | $3.90 |
+| The same read via a Lambda (`/orders-via-lambda`: about 7 ms billed, measured; cost computed) | $3.50 | $0.125 | $0.25 | **$3.87** |
 | Read, direct, eventually consistent (hypothetical) | $3.50 | $0.0625 | none | $3.56 |
 
-- **The direct read saves about $0.27 per million (about 7%)**. Strong consistency costs about $0.06 per million extra.
+- **The direct read saves about $0.25 per million (about 7%)**, but measured slower (section 3.3). Strong consistency costs about $0.06 per million extra.
   Both are small next to API Gateway's $3.50.
 - **Lambda tuning moves cents.** At learning volumes (for example 10,000 requests a month) the whole API costs a few cents.
 
