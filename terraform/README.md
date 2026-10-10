@@ -301,6 +301,11 @@ sed "s/ACCOUNT_ID/$(aws sts get-caller-identity --query Account --output text)/"
   ARNs or IDs, because the repository is public. The full plan is in the step log, where the AWS account ID is masked.
   The role's trust policy checks this repo by immutable owner/repo ID and allows only the `main` branch (plan)
   and the `production` environment (apply). Pull requests cannot assume it.
+- **The apply job gets the Lambda zips from the plan job.** It runs on a fresh machine, and Terraform reads each function's zip
+  when it creates or updates the function. The plan job stages the plan and the zips (built in the hidden `.build` folder)
+  into one artifact, with `include-hidden-files: true`, and the apply job unpacks them into `terraform/`. Without this, a
+  deploy that creates or changes a function's code fails with `reading ZIP file ... no such file or directory` (a deploy that
+  only changes configuration, such as memory, does not need the zip, so the gap stayed hidden until a new function).
 - **Packaging is Terraform.** `archive_file` zips each function's folder under `src/`; `apply` updates a Lambda when its code hash
   changes. There is no separate `update-function-code` step.
 - **The pipeline cannot change its own permissions.** The deploy role, state bucket and permissions boundary live

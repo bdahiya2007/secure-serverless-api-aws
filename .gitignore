@@ -22,6 +22,9 @@
 # Terraform CLI config that may embed credentials
 .terraformrc
 terraform.rc
+# Saved plans can contain sensitive values and are only meant for the CI hand-off between jobs
+tfplan
+*.tfplan
 # Crash logs
 crash.log
 crash.*.log

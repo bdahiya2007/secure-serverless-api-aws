@@ -95,11 +95,22 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload plan
+      # The apply job runs on a fresh machine, so it needs more than the plan: when Terraform creates or updates a
+      # Lambda it reads the zip this plan was made with (the plan records the zip's hash). The zips are built by the
+      # archive_file data source during plan, into a hidden .build folder, so they are staged here and the artifact
+      # must include hidden files. The staged layout mirrors terraform/ so the apply job can unpack it in place.
+      - name: Stage plan and Lambda packages
+        run: |
+          mkdir -p stage/environments/dev stage/modules/lambda-function/.build
+          cp "$WORKDIR/tfplan" stage/environments/dev/tfplan
+          cp terraform/modules/lambda-function/.build/*.zip stage/modules/lambda-function/.build/
+
+      - name: Upload plan and Lambda packages
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: tfplan
-          path: ${{ env.WORKDIR }}/tfplan
+          path: stage
+          include-hidden-files: true
           retention-days: 1
           if-no-files-found: error
 
@@ -131,11 +142,12 @@ jobs:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Download plan
+      # Unpacks the plan to terraform/environments/dev/tfplan and the Lambda zips to terraform/modules/lambda-function/.build/.
+      - name: Download plan and Lambda packages
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: tfplan
-          path: ${{ env.WORKDIR }}
+          path: terraform
 
       - name: Terraform init
         working-directory: ${{ env.WORKDIR }}
