@@ -16,6 +16,18 @@ variable "environment" {
   default     = "dev"
 }
 
+variable "enable_api_cache" {
+  description = "Provision an API Gateway stage cache (0.5 GB) and cache GET responses for api_cache_ttl_seconds. COSTS by the hour even when idle (not free-tier eligible), and reads can be stale for up to the TTL after a write. Keep false unless demonstrating; apply with -var enable_api_cache=true, and re-apply without it to remove."
+  type        = bool
+  default     = false
+}
+
+variable "api_cache_ttl_seconds" {
+  description = "Cache TTL used when enable_api_cache is true."
+  type        = number
+  default     = 300
+}
+
 variable "enable_waf" {
   description = "Attach an AWS WAF per-IP rate limit to the API. COSTS about $6/month (web ACL $5 + rule $1, billed hourly even when idle, plus $0.60 per million requests). Keep false unless demonstrating; apply with -var enable_waf=true, and re-apply without it to remove."
   type        = bool

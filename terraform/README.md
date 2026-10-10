@@ -95,7 +95,7 @@ aws lambda invoke --function-name save-order \
 | Authorization | **Cognito user pool authorizer** (`COGNITO_USER_POOLS`): requests need a valid ID token in the `Authorization` header. The module rejects `NONE`; `AWS_IAM` is also supported. |
 | Request validation | JSON Schema model (`terraform/environments/dev/models/create-order.json`) rejects bad bodies before the Lambda runs. The Lambda validates again (defense in depth); keep the two in sync. |
 | Throttling | 5 requests/second, burst 10, stage-wide |
-| Not enabled | Access logs (needs an account-wide CloudWatch role), caching, CORS, custom domain, X-Ray on the API stage. WAF is available but **off by default** (see below). |
+| Not enabled | Access logs (needs an account-wide CloudWatch role), CORS, custom domain, X-Ray on the API stage. The stage cache and the WAF are available but **off by default** (see below). |
 
 Cost: REST API requests are about $3.50 per million. There is no charge while idle.
 
@@ -189,6 +189,42 @@ Set `enable_xray_tracing = false` in `environments/dev/main.tf` to turn it off.
 
 Limits: tracing starts at the Lambda (API Gateway stage tracing is not enabled), and DynamoDB calls do not
 appear as separate nodes because that needs the X-Ray SDK bundled into the function (an npm dependency).
+
+## API Gateway stage cache (optional, billed, OFF by default)
+
+A stage cache answers repeated `GET` requests without calling the backend. It is **billed by the hour even when idle and is not
+free-tier eligible** (AWS's own example is $0.038 per hour for 1.6 GB; the smallest, 0.5 GB, is cheaper, about $0.02 per hour, which I could not
+verify). It is off by default.
+
+| Setting | Value |
+|---|---|
+| Switch | `enable_api_cache` (default `false`); `api_cache_ttl_seconds` (default **300**, allowed 1 to 3600) |
+| Size | 0.5 GB, the smallest |
+| What is cached | `GET` methods only: both read routes (`/orders/{orderId}` and `/orders-via-lambda/{orderId}`). `POST` is never cached. |
+| Cache key | The `orderId` path parameter, set explicitly on each integration, so each id is cached separately. Without it, one order's response could be served for another. |
+| Data at rest | Encrypted |
+| `Cache-Control: max-age=0` | **Ignored** (`SUCCEED_WITHOUT_RESPONSE_HEADER`), so a client cannot bypass the cache and force backend calls |
+| Time to create or remove | About 4 minutes |
+
+```bash
+cd terraform/environments/dev
+terraform apply -var enable_api_cache=true      # create (billing starts); or run deploy.yml manually with the input ticked
+terraform apply                                 # remove: re-apply WITHOUT the variable
+terraform output api_cache_enabled              # check it is false when you are done
+```
+
+**Trade-offs, read before turning it on:**
+- **Stale reads.** Writes do not invalidate the cache. After a `POST`, a `GET` of the same order can return the old result for up to the TTL
+  (300 s). This **undoes the read-your-writes guarantee** the reads were built with (`ConsistentRead`), and an empty result may be cached too
+  (not verified). Flush it with `aws apigateway flush-stage-cache --rest-api-id <id> --stage-name dev`.
+- **Responses are shared between signed-in users.** That matches today's behaviour (any signed-in user can read any order), but it is a
+  **blocker for per-user ownership**: the cache would need the caller's identity in its key, or caching must be skipped.
+- **Only repeated reads of the same order benefit.** A cache hit skips the backend (an estimated 30 to 45 ms), but the network round trip
+  (about 275 ms in measurements) remains. Unique ids never hit.
+- Watch `CacheHitCount` and `CacheMissCount` (CloudWatch, namespace `AWS/ApiGateway`, dimensions `ApiName` and `Stage`) to see whether it is working.
+
+See [TESTING.md](../docs/TESTING.md) for the steps to verify it (hit, stale read, and a check that ids are not mixed up) and the
+[optimization guide](../docs/OPTIMIZATION_GUIDE.md) for cost and security.
 
 ## WAF rate limit (optional, billed, OFF by default)
 
@@ -320,8 +356,9 @@ sed "s/ACCOUNT_ID/$(aws sts get-caller-identity --query Account --output text)/"
   `false` and apply the bootstrap.
 - **State** is in a private, versioned, TLS-only, SSE-S3 encrypted S3 bucket with native locking
   (`use_lockfile`), old versions expire after 90 days. No DynamoDB lock table. Cost: pennies.
-- **WAF caveat.** `deploy.yml` applies with `enable_waf=false` unless you run it manually with the input ticked.
-  A push to `main` therefore **removes** a WAF you enabled by hand. Enable it via the workflow dispatch input.
+- **WAF and cache caveat.** `deploy.yml` applies with `enable_waf=false` and `enable_api_cache=false` unless you run it manually
+  with the input ticked. A push to `main` therefore **removes** a WAF or a stage cache you enabled by hand, which is the safe default
+  for billed features. Enable them through the workflow dispatch inputs.
 - **First CI runs may report `AccessDenied`.** The deploy role's policy is resource-scoped and was written
   without being able to test it from CI. Add the missing action in `terraform/bootstrap/main.tf` and apply it manually.
 - Actions are **pinned by commit SHA** (the repo requires it). Update the SHA and the version comment together.
@@ -394,5 +431,6 @@ which is git-ignored; keep that file safe. `*.tfstate` and `*.tfvars` are never 
 - Customer-managed KMS key — monthly fee per key (not implemented).
 - Cognito PLUS tier, SMS MFA, SES email — billed; not configured.
 - Extra CloudWatch dashboards (beyond 3 free), logs-insights widgets, custom metrics — billed; not used.
-- API caching (hourly), API access logs, custom domain, WAF logging and managed rule groups — not enabled.
+- `enable_api_cache` — the API Gateway stage cache, billed by the hour while on (about $0.02 per hour for 0.5 GB, unverified); off by default.
+- API access logs, custom domain, WAF logging and managed rule groups — not enabled.
 - Dead-letter queue, CloudWatch alarms, VPC attachment (needs a NAT gateway) — not enabled.

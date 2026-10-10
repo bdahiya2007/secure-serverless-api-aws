@@ -130,6 +130,34 @@ variable "cognito_user_pool_arns" {
   default     = []
 }
 
+variable "cache_enabled" {
+  description = "Provision a stage cache and cache GET responses. BILLED by the hour even when idle, and not free-tier eligible: about $0.038 per hour for 1.6 GB (AWS's own example; the 0.5 GB size is cheaper). While on, reads can be stale for up to cache_ttl_seconds after a write."
+  type        = bool
+  default     = false
+}
+
+variable "cache_size_gb" {
+  description = "Stage cache size in GB. Larger sizes cost more per hour."
+  type        = string
+  default     = "0.5"
+
+  validation {
+    condition     = contains(["0.5", "1.6", "6.1", "13.5", "28.4", "58.2", "118", "237"], var.cache_size_gb)
+    error_message = "cache_size_gb must be one of 0.5, 1.6, 6.1, 13.5, 28.4, 58.2, 118, 237."
+  }
+}
+
+variable "cache_ttl_seconds" {
+  description = "How long a cached GET response is served before the backend is asked again (API Gateway allows 0 to 3600; 300 is its default)."
+  type        = number
+  default     = 300
+
+  validation {
+    condition     = var.cache_ttl_seconds >= 1 && var.cache_ttl_seconds <= 3600
+    error_message = "cache_ttl_seconds must be between 1 and 3600."
+  }
+}
+
 variable "throttling_rate_limit" {
   description = "Steady-state requests per second allowed across the stage. Caps abuse and cost."
   type        = number

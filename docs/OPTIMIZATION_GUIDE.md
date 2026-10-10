@@ -38,6 +38,7 @@ Environments are reused for minutes, then retired.
 | **Init warm-up and client timeouts** | Moves credential/region resolution into the boosted-CPU init phase; fails fast on hangs | Slow first-request work that can move earlier, or hangs are costly | The gain is inside the noise | No gain; rejected |
 | **Bundle and minify** (esbuild) | One small file, pinned SDK, often faster cold start | You need a pinned SDK or have many dependencies | You want no build tooling | **Not measured**; runtime SDK chosen on purpose |
 | **Provisioned concurrency** | No cold starts: environments stay initialized | A strict latency target with steady traffic | Cost matters (it bills continuously, even when idle) | **Not used or measured** |
+| **API Gateway stage cache** | A cache hit skips the backend (Lambda or DynamoDB) | Reads of the same item repeat, and slightly old data is acceptable | Reads must reflect the latest write, results differ per user, or ids rarely repeat | Built behind a switch, **off by default**; not yet measured |
 | **Direct service integration** | One fewer service in the path; no function to run or pay for | The request is pure data mapping (key lookup, simple query) | You need validation, rules, branching or complex logic | Used for one read path; measured **30 to 40 ms slower** than the same read via Lambda, but about $0.25 per million cheaper and one fewer function to run |
 
 ## 3. Measurements
@@ -177,6 +178,10 @@ allowance is reached first.
 
 ### Other options (computed)
 
+- **API Gateway stage cache** (`enable_api_cache`): billed **by the hour even when idle, and not free-tier eligible**. AWS's own
+  example is $0.038 per hour for 1.6 GB, about $27 a month; the smallest 0.5 GB size is cheaper (about $0.02 per hour, about $15 a
+  month, **unverified**). A cache hit saves the backend's share of a request, not the network round trip.
+
 - **Provisioned concurrency**, one always-warm 512 MB environment: **about $5.40 per month**, billed whether or not
   anyone calls the API, plus normal request and duration charges. It removes cold starts but is not free-tier eligible.
 - **Worst-case abuse:** the stage throttle is 5 requests per second. Sustained for a whole month that is about 13 million
@@ -195,6 +200,17 @@ allowance is reached first.
 | Hand-written type conversion | Slim imports (rejected) | Not shipped | It would need its own tests, because conversion bugs can corrupt or mis-type data |
 | Retry storms or hangs | Client timeouts (rejected) | SDK defaults apply | Too-aggressive timeouts can amplify load through retries |
 | Slightly higher cost per abused cold request | 512 MB | Throttle (5 rps, burst 10), Cognito auth, optional WAF, budget alerts | See the worst-case figure in section 4 |
+
+### API Gateway stage cache (when switched on)
+
+| Risk | How it is handled here | Residual |
+|---|---|---|
+| **Stale data** | TTL is 300 s, the requested value, and the cache is off by default | Writes do not invalidate it, so a read can show old data for up to the TTL, which undoes the read-your-writes guarantee |
+| **One id's response served for another** | The `orderId` path parameter is set as the cache key on each integration; a test step checks two orders return different bodies | A future route that forgets a cache key would share one entry |
+| **Responses shared between users** | Acceptable today, because any signed-in user can already read any order | **Blocks per-user ownership**: the key would need the caller's identity, or caching must be skipped |
+| **Cache bypass to force backend load** | `Cache-Control: max-age=0` is ignored | Unique ids always miss the cache |
+| **Order data at rest in the cache** | Cache data is encrypted | The cache holds order contents for up to the TTL |
+| **Cost left running** | Off by default; the deploy applies with it off, so a push to `main` removes it | Left on by hand it bills every hour |
 
 ### Direct DynamoDB read
 

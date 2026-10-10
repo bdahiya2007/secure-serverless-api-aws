@@ -33,6 +33,16 @@ output "user_pool_client_id" {
   value       = module.orders_user_pool.client_id
 }
 
+output "rest_api_id" {
+  description = "ID of the orders REST API (for commands such as flushing the stage cache)."
+  value       = module.orders_api.rest_api_id
+}
+
+output "api_cache_enabled" {
+  description = "Whether the (billed) API Gateway stage cache is on."
+  value       = var.enable_api_cache
+}
+
 output "waf_enabled" {
   description = "Whether the (billed) WAF rate limit is attached to the API."
   value       = var.enable_waf
