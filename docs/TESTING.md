@@ -240,6 +240,38 @@ terraform output waf_enabled                              # must print false
 Expect 401 (or 429) at first and then **403** once an IP passes 100 requests in 5 minutes. WAF enforcement can lag by
 about a minute. Note that a push to `main` also removes the WAF, because `deploy.yml` applies with it disabled.
 
+## 7. Multi-region active/active (optional, billed)
+
+Off by default (`enable_multi_region`). Needs an existing Route 53 hosted zone. Apply it locally, test, then remove it:
+
+```bash
+cd terraform/environments/dev
+terraform apply -var enable_multi_region=true -var multi_region_domain=api.example.com -var route53_zone_name=example.com
+cd ../../..
+API_DOMAIN=api.example.com ./scripts/demo/multi-region-checks.sh              # replication, conflict, domain
+SIMULATE_FAILOVER=1 API_DOMAIN=api.example.com ./scripts/demo/multi-region-checks.sh   # also fails the primary over
+cd terraform/environments/dev && terraform apply                              # REMOVE it again (no variables)
+terraform output multi_region_enabled                                         # must print false
+```
+
+What the script checks, and what to expect:
+
+| Step | Expect |
+|---|---|
+| 1 `GET /health` on both regional APIs | `{"status":"ok","region":"..."}` from each |
+| 2 A token from the one Cognito pool used on the second region's API | no token 401; valid token **404** (accepted, order not found). A 401 with a valid token means cross-region tokens are not accepted |
+| 3 Replication both ways | an order written in one region is read in the other, normally within a few seconds; the script prints the lag |
+| 4 The same item written in both regions at once | after a few seconds both regions show the **same** quantity (last writer wins; the other write is lost) |
+| 5 The custom domain | DNS answers, `/health` returns a region, an authenticated read works |
+| 6 (`SIMULATE_FAILOVER=1`) The primary's health check is forced to fail | the domain starts answering from the second region after roughly 1 to 3 minutes; the check is restored when the script ends |
+
+It creates one temporary Cognito user and order rows and removes them on exit (deletes replicate). Step 6 changes only the health check's
+inverted flag, never real resources. If the script is killed, restore it with `aws route53 update-health-check --health-check-id <id> --no-inverted`
+(the ids are in `terraform output multi_region_health_check_ids`).
+
+Also verify after removal: no `Orders` replica (`aws dynamodb describe-table --table-name Orders --query Table.Replicas`), no Route 53 health checks, and the
+existing site's records are unchanged. A push to `main` also refuses to run while the setup is on (`deploy.yml` stops with a message).
+
 ## Troubleshooting
 
 | Symptom | Likely cause and fix |

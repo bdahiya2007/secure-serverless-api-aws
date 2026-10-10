@@ -21,6 +21,8 @@ terraform/
     ├── cognito-user-pool/         # Cognito user pool + public app client
     ├── dax-cluster/               # optional DAX cluster, its role, security groups and a Logs endpoint (billed; off by default)
     ├── waf-rate-limit/            # optional WAF per-IP rate limit (billed; off by default)
+    ├── api-custom-domain/         # optional regional custom domain: ACM certificate, DNS validation, mapping (multi-region)
+    ├── route53-multi-region/      # optional Route 53 latency records and health checks (billed; off by default)
     └── cloudwatch-dashboard/      # API Gateway Count/4XXError, Lambda Invocations/Errors
 src/save-order/                    # write Lambda: Node.js code and unit tests
 src/get-order/                     # read Lambda (alternative to the direct read): Node.js code and unit tests
@@ -29,6 +31,7 @@ scripts/e2e-test.sh                # end-to-end smoke test with automatic cleanu
 scripts/compare-reads.sh           # interleaved latency comparison: direct read vs Lambda read (cleans up)
 scripts/build-dax-package.sh       # builds the read Lambda package with the DAX client (only for the optional DAX switch)
 scripts/secret-scan.py             # secret / sensitive-data scanner (pre-commit hook and CI)
+scripts/demo/                      # behaviour checks for the cache, DAX, WAF and multi-region demos (clean up after themselves)
 scripts/benchmark/                 # cold-start and memory benchmark (temporary function, cleans up)
 docs/TESTING.md                    # how to test: unit, end-to-end, observability, pipeline, WAF
 docs/OPTIMIZATION_GUIDE.md         # when and why to use each optimization, with measurements, cost and security risks
@@ -47,6 +50,8 @@ docs/permission-set-inline-policy.json   # extra IAM your SSO permission set nee
 | Encryption at rest | On, AWS-owned key (free) |
 | Deletion protection | On (free) |
 | Point-in-time recovery | **Off** (billed per GB, no free tier) |
+| DynamoDB Streams | **On** (`NEW_AND_OLD_IMAGES`; free to enable, nothing reads it yet; a global table needs it) |
+| Global table replica | **Off** (`enable_multi_region`; billed, see [Multi-region](#multi-region-active-active-global-table-optional-billed-off-by-default)) |
 
 Outputs: `orders_table_name`, `orders_table_arn` (the Lambda policy is scoped to this ARN).
 
@@ -97,7 +102,7 @@ aws lambda invoke --function-name save-order \
 | Authorization | **Cognito user pool authorizer** (`COGNITO_USER_POOLS`): requests need a valid ID token in the `Authorization` header. The module rejects `NONE`; `AWS_IAM` is also supported. |
 | Request validation | JSON Schema model (`terraform/environments/dev/models/create-order.json`) rejects bad bodies before the Lambda runs. The Lambda validates again (defense in depth); keep the two in sync. |
 | Throttling | 5 requests/second, burst 10, stage-wide |
-| Not enabled | Access logs (needs an account-wide CloudWatch role), CORS, custom domain, X-Ray on the API stage. The stage cache and the WAF are available but **off by default** (see below). |
+| Not enabled | Access logs (needs an account-wide CloudWatch role), CORS, X-Ray on the API stage. A custom domain exists only with the optional multi-region setup. The stage cache and the WAF are available but **off by default** (see below). |
 
 Cost: REST API requests are about $3.50 per million. There is no charge while idle.
 
@@ -304,6 +309,59 @@ for i in $(seq 1 300); do curl -s -o /dev/null -w "%{http_code}\n" -X POST "$URL
 
 Not enabled (each costs extra): WAF logging, managed rule groups, Bot Control, CAPTCHA.
 
+## Multi-region, active/active: global table (optional, billed, OFF by default)
+
+```
+client -> Route 53 (latency routing, health-checked) -+-> API Gateway -> Lambda -> Orders replica   (primary region)
+                                                      +-> API Gateway -> Lambda -> Orders replica   (second region, us-west-2)
+                         Orders replicas keep each other in sync (DynamoDB global table, streams)
+```
+
+With `enable_multi_region` on, `Orders` becomes a **DynamoDB global table** with a writable replica in `dr_region` (default `us-west-2`),
+a second copy of the API (Lambda write and read, API Gateway with the same routes) runs there, and Route 53 sends each client to the
+nearest healthy region at one name. Either region can take reads and writes, and if one fails, DNS stops answering with it.
+
+| Setting | Value |
+|---|---|
+| Switch | `enable_multi_region` (default `false`); also needs `multi_region_domain` (for example `api.example.com`) and `route53_zone_name` (an **existing** public hosted zone, for example `example.com`). Pass both at apply time; they are not committed. |
+| Table | Streams on (`NEW_AND_OLD_IMAGES`), one replica in `dr_region`. The replica is not deletion protected, so the switch can remove it; the primary keeps its protection. Point-in-time recovery follows the primary's setting. |
+| Second stack | `save-order-dr`, `save-order-lookup-dr`, `save-order-api-read-role-dr` and an API with the same routes, each reading and writing its **own region's** replica. IAM names are global, hence the suffix (still inside the `save-order-*` scope). Same permissions boundary, 512 MB, X-Ray, throttling. The WAF rate limit is attached to the second API too when `enable_waf` is on. |
+| Names | A regional custom domain with a free ACM certificate in **each** region; Route 53 holds two latency alias records for the one name, each with a health check. Only records for that one name and the certificate validation are added; **existing records are never changed**. |
+| Health route | `GET /health` on each API: no token (a checker has none), answered by API Gateway itself (a MOCK integration; no Lambda or DynamoDB call) and returns `{"status":"ok","region":"..."}`. It shows that the regional API Gateway is up, **not** that DynamoDB or Lambda work. |
+| Sign-in | **One Cognito user pool, in the primary region.** The second API validates tokens against it. Users are not replicated, so new sign-ins depend on the primary region; tokens already issued keep working in the second region while the primary is down. (Cross-region validation is verified in the demo step 2, not assumed.) |
+| Permissions | Bootstrap: the permissions boundary now also covers the second region's table and Lambda log groups (apply the bootstrap once, a one-resource change). The demo is applied **locally**; the deploy role has no second-region, Route 53 or ACM access, and `deploy.yml` stops with a clear message if the setup is still in the state. |
+
+```bash
+cd terraform/bootstrap && terraform apply          # once: the boundary change (1 resource)
+cd ../environments/dev
+terraform apply -var enable_multi_region=true -var multi_region_domain=api.example.com -var route53_zone_name=example.com
+terraform apply                                    # REMOVE it: re-apply WITHOUT the variables
+terraform output multi_region_enabled              # must print false
+```
+
+Creating it takes a few minutes (replica creation and two certificate validations); the replica copies existing items.
+
+**Cost.** Off by default, because it bills with no free tier on the new parts: every write is charged again in the replica region
+(replicated write units, about the same price as a write), storage is charged there, the second stack adds its own request charges,
+and each Route 53 health check is a monthly charge (prorated; an HTTPS check costs more than the basic one, roughly $1 to $2 a month each,
+not verified) plus about $0.60 per million DNS queries. A short demo costs cents; left on it is roughly a few dollars a month for an idle table.
+The hosted zone is already paid for by the existing site.
+
+**Trade-offs, read before turning it on:**
+- **Last writer wins.** Concurrent writes to the *same* item in two regions resolve by timestamp; one write is silently lost. Orders are keyed by
+  `orderId` and `itemId`, so conflicts need the same item written in both regions at once. Anything that must not lose writes (counters, balances)
+  needs a different design.
+- **Replication is asynchronous**, usually about a second. A read in the other region right after a write there can miss it, and **strongly
+  consistent reads only apply inside one region**. Do not read-after-write across regions.
+- **DNS failover is not instant.** The health check needs about 90 s (three 30 s checks) to fail, and clients keep the old answer until the 60 s
+  alias TTL ends, so expect roughly 1 to 3 minutes. Clients that cache DNS longer take longer.
+- **The health route is shallow**: a region with a broken Lambda or table still looks healthy. A deeper check would call a real read.
+- **Shared fate for sign-in** (one user pool) and for the stack's definition (one Terraform state).
+- **Cross-region cost and compliance:** orders now live in two regions; check data-residency rules before using real data.
+- **Delete handling:** deleting the replica needs the switch off; the global table keeps working in the remaining region.
+
+See [TESTING.md](../docs/TESTING.md) for the replication, conflict and failover checks.
+
 ## Cognito user pool
 
 | Setting | Value |
@@ -483,6 +541,7 @@ which is git-ignored; keep that file safe. `*.tfstate` and `*.tfvars` are never 
 - Cognito PLUS tier, SMS MFA, SES email — billed; not configured.
 - Extra CloudWatch dashboards (beyond 3 free), logs-insights widgets, custom metrics — billed; not used.
 - `enable_api_cache` — the API Gateway stage cache, billed by the hour while on (about $0.02 per hour for 0.5 GB, unverified); off by default.
-- API access logs, custom domain, WAF logging and managed rule groups — not enabled.
+- API access logs, WAF logging and managed rule groups — not enabled.
+- `enable_multi_region` — the global table replica, a second-region API stack and Route 53 health checks and records; billed (replicated writes, storage, health checks); off by default.
 - `enable_dax` — a DAX cluster plus a Logs endpoint, billed per hour while on (about $0.05 per hour, with no free tier); off by default. The read Lambda joins the VPC only while it is on.
 - Dead-letter queue, CloudWatch alarms — not enabled.

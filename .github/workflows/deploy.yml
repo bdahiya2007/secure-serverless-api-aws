@@ -96,6 +96,18 @@ jobs:
             exit 1
           fi
 
+      # The multi-region setup (global table replica, second-region API, Route 53 records) is a billed demo applied locally: the
+      # deploy role has no permissions in the second region, Route 53 or ACM. If it is still in the state, stop and say why.
+      - name: Stop if multi-region is still switched on
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          n=$(terraform show -json tfplan | jq '[.resource_changes[] | select(.address | test("module\\.(dr_|primary_domain|multi_region_dns)|multi_region_check")) | select(.change.actions != ["no-op"])] | length')
+          r=$(terraform show -json tfplan | jq '[.resource_changes[] | select(.address == "module.orders_table.aws_dynamodb_table.this") | select(((.change.before.replica // []) | length) != ((.change.after.replica // []) | length))] | length')
+          if [ "$n" -gt 0 ] || [ "$r" -gt 0 ]; then
+            echo "::error::Multi-region resources (second-region API, Route 53 records or the table replica) are in the state and this plan would change them, but the deploy role cannot manage them. Turn it off locally first (terraform apply without -var enable_multi_region=true), then re-run."
+            exit 1
+          fi
+
       - name: Summarize plan
         working-directory: ${{ env.WORKDIR }}
         run: |

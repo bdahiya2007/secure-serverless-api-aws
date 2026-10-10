@@ -72,3 +72,18 @@ output "get_order_url" {
   description = "URL pattern for GET /orders/{orderId} (direct DynamoDB integration; requires a Cognito ID token)."
   value       = "${module.orders_api.invoke_url}/orders/{orderId}"
 }
+
+output "multi_region_enabled" {
+  description = "Whether the (billed) global table replica, second-region API stack and Route 53 latency routing are on."
+  value       = var.enable_multi_region
+}
+
+output "dr_create_order_url" {
+  description = "URL for POST /orders in the second region's own endpoint, or null when multi-region is off."
+  value       = try("${module.dr_api[0].invoke_url}/orders", null)
+}
+
+output "multi_region_health_check_ids" {
+  description = "Route 53 health check ID per region (simulate a regional failure with aws route53 update-health-check --inverted), or null when off."
+  value       = try(module.multi_region_dns[0].health_check_ids, null)
+}

@@ -17,3 +17,8 @@ output "range_key" {
   description = "Sort key attribute name."
   value       = aws_dynamodb_table.this.range_key
 }
+
+output "stream_arn" {
+  description = "ARN of the table's stream, or null when streams are off."
+  value       = aws_dynamodb_table.this.stream_arn
+}
