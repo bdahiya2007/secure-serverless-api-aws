@@ -16,6 +16,10 @@ module "orders_table" {
 
   deletion_protection_enabled   = true
   enable_point_in_time_recovery = false # billed per GB; enable once real data matters
+
+  # Streams are free to enable and are required by a global table. The replica (multi-region) is OFF by default: it bills.
+  enable_streams  = true
+  replica_regions = var.enable_multi_region ? [var.dr_region] : []
 }
 
 module "save_order_function" {
@@ -176,6 +180,9 @@ module "orders_api" {
   stage_name  = var.environment
 
   cognito_user_pool_arns = [module.orders_user_pool.user_pool_arn]
+
+  # GET /health for the Route 53 health check, only while the multi-region setup is on.
+  enable_health_route = var.enable_multi_region
 
   # Optional and OFF by default: a stage cache is billed hourly even when idle.
   cache_enabled     = var.enable_api_cache

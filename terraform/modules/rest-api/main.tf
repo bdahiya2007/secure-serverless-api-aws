@@ -207,6 +207,62 @@ resource "aws_api_gateway_integration_response" "dynamodb" {
   depends_on = [aws_api_gateway_integration.dynamodb, aws_api_gateway_method_response.dynamodb]
 }
 
+# ---------------------------------------------------------------------------
+# Optional health route for Route 53 health checks: GET /health answers 200 from API Gateway itself (a MOCK integration, so
+# no Lambda or DynamoDB is called and nothing is billed beyond the request). It is deliberately unauthenticated, because a
+# health checker has no token, and it proves only that this region's API Gateway is up, not that DynamoDB or Lambda work.
+# ---------------------------------------------------------------------------
+
+resource "aws_api_gateway_resource" "health" {
+  count = var.enable_health_route ? 1 : 0
+
+  rest_api_id = aws_api_gateway_rest_api.this.id
+  parent_id   = aws_api_gateway_rest_api.this.root_resource_id
+  path_part   = "health"
+}
+
+resource "aws_api_gateway_method" "health" {
+  count = var.enable_health_route ? 1 : 0
+
+  rest_api_id   = aws_api_gateway_rest_api.this.id
+  resource_id   = aws_api_gateway_resource.health[0].id
+  http_method   = "GET"
+  authorization = "NONE" # health checkers cannot send a token; the route returns a fixed body
+}
+
+resource "aws_api_gateway_integration" "health" {
+  count = var.enable_health_route ? 1 : 0
+
+  rest_api_id = aws_api_gateway_rest_api.this.id
+  resource_id = aws_api_gateway_resource.health[0].id
+  http_method = aws_api_gateway_method.health[0].http_method
+
+  type              = "MOCK"
+  request_templates = { "application/json" = "{\"statusCode\": 200}" }
+}
+
+resource "aws_api_gateway_method_response" "health" {
+  count = var.enable_health_route ? 1 : 0
+
+  rest_api_id     = aws_api_gateway_rest_api.this.id
+  resource_id     = aws_api_gateway_resource.health[0].id
+  http_method     = aws_api_gateway_method.health[0].http_method
+  status_code     = "200"
+  response_models = { "application/json" = "Empty" }
+}
+
+resource "aws_api_gateway_integration_response" "health" {
+  count = var.enable_health_route ? 1 : 0
+
+  rest_api_id        = aws_api_gateway_rest_api.this.id
+  resource_id        = aws_api_gateway_resource.health[0].id
+  http_method        = aws_api_gateway_method.health[0].http_method
+  status_code        = aws_api_gateway_method_response.health[0].status_code
+  response_templates = { "application/json" = "{\"status\":\"ok\",\"region\":\"${data.aws_region.current.region}\"}" }
+
+  depends_on = [aws_api_gateway_integration.health]
+}
+
 resource "aws_api_gateway_deployment" "this" {
   rest_api_id = aws_api_gateway_rest_api.this.id
 
@@ -214,7 +270,7 @@ resource "aws_api_gateway_deployment" "this" {
   # plan time) instead of whole resource objects avoids a spurious redeploy after the
   # first apply, when provider-filled defaults change the objects.
   triggers = {
-    redeployment = sha1(jsonencode([var.routes, var.cognito_user_pool_arns, var.dynamodb_routes, var.cache_enabled, var.cache_size_gb, var.cache_ttl_seconds, "cache-keys-v1"]))
+    redeployment = sha1(jsonencode(concat([var.routes, var.cognito_user_pool_arns, var.dynamodb_routes, var.cache_enabled, var.cache_size_gb, var.cache_ttl_seconds, "cache-keys-v1"], var.enable_health_route ? ["health-v1"] : [])))
   }
 
   lifecycle {
@@ -225,6 +281,7 @@ resource "aws_api_gateway_deployment" "this" {
     aws_api_gateway_integration.this,
     aws_api_gateway_integration.dynamodb,
     aws_api_gateway_integration_response.dynamodb,
+    aws_api_gateway_integration_response.health,
   ]
 }
 

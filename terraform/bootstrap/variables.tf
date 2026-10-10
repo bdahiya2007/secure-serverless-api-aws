@@ -70,6 +70,12 @@ variable "lambda_function_name" {
   default     = "save-order"
 }
 
+variable "dr_region" {
+  description = "Second region used by the optional multi-region setup (replica table and Lambda log groups), so application roles there stay inside the permissions boundary."
+  type        = string
+  default     = "us-west-2"
+}
+
 variable "dax_cluster_name" {
   description = "Name of the optional DAX cluster whose data-plane actions application roles may use."
   type        = string

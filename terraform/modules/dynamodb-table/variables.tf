@@ -58,3 +58,26 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "enable_streams" {
+  description = "Turn on DynamoDB Streams. Free to enable; required for a global table (replica_regions)."
+  type        = bool
+  default     = false
+}
+
+variable "stream_view_type" {
+  description = "What each stream record carries. A global table needs NEW_AND_OLD_IMAGES."
+  type        = string
+  default     = "NEW_AND_OLD_IMAGES"
+
+  validation {
+    condition     = contains(["KEYS_ONLY", "NEW_IMAGE", "OLD_IMAGE", "NEW_AND_OLD_IMAGES"], var.stream_view_type)
+    error_message = "stream_view_type must be KEYS_ONLY, NEW_IMAGE, OLD_IMAGE or NEW_AND_OLD_IMAGES."
+  }
+}
+
+variable "replica_regions" {
+  description = "Regions that hold a replica of the table (a DynamoDB global table, multi-region active/active). BILLED: every write is charged again in each replica region (replicated write units), plus storage there. Empty means a regular single-region table."
+  type        = list(string)
+  default     = []
+}

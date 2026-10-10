@@ -32,3 +32,13 @@ output "api_name" {
   description = "Name of the REST API (the ApiName metric dimension)."
   value       = aws_api_gateway_rest_api.this.name
 }
+
+output "health_host" {
+  description = "Host name of this regional API's default endpoint (for a Route 53 health check)."
+  value       = "${aws_api_gateway_rest_api.this.id}.execute-api.${data.aws_region.current.region}.amazonaws.com"
+}
+
+output "health_path" {
+  description = "Path of the health route including the stage, or null when the health route is off."
+  value       = var.enable_health_route ? "/${var.stage_name}/health" : null
+}

@@ -30,6 +30,20 @@ flowchart LR
   L -.-> CW
 ```
 
+**Optional multi-region active/active** (off by default, `enable_multi_region`): Orders becomes a DynamoDB global table, and a second copy of the API runs in another region behind Route 53.
+
+```mermaid
+flowchart LR
+  C["Client"] --> R53["Route 53<br/>latency routing<br/>health checks"]
+  R53 -->|"active"| A1["API Gateway + Lambda<br/>us-east-1"]
+  R53 -->|"active"| A2["API Gateway + Lambda<br/>us-west-2"]
+  A1 --> T1[("Orders<br/>us-east-1")]
+  A2 --> T2[("Orders replica<br/>us-west-2")]
+  T1 <-->|"replication"| T2
+  CG["Cognito user pool<br/>(one, in us-east-1)"] -.-> A1
+  CG -.-> A2
+```
+
 **Delivery pipeline:** nothing reaches AWS without a reviewed pull request, and nothing changes AWS without an approval.
 
 ```mermaid
@@ -43,7 +57,7 @@ flowchart LR
 
 ## What this demonstrates
 
-- **Infrastructure as code, modular:** eight reusable Terraform modules with validated inputs and plan-time guardrails.
+- **Infrastructure as code, modular:** ten reusable Terraform modules with validated inputs and plan-time guardrails.
 - **Direct service integration:** API Gateway reads DynamoDB with no Lambda, using VTL mapping templates and a read-only role.
 - **Security by default:** least-privilege IAM, a permissions boundary, no stored credentials, defense in depth on input.
 - **Cost awareness:** idle cost is about $0, and every billed feature is off until deliberately enabled.
@@ -81,6 +95,7 @@ free AWS-published data. Anything billed is off by default and documented:
 | DynamoDB point-in-time recovery | Per GB stored | Off |
 | DynamoDB Accelerator (DAX), one node | About $0.05 per hour while on (node plus a Logs endpoint), with no free tier | Off (`enable_dax`); reads become eventually consistent and can be stale when on |
 | API Gateway stage cache (300 s TTL) | Billed by the hour even when idle (not free-tier eligible) | Off (`enable_api_cache`); reads can be stale for up to the TTL when on |
+| Multi-region active/active (global table replica, second-region API, Route 53 health checks) | Every write billed again in the replica region, plus storage, a second stack and health checks; cents for a short demo | Off (`enable_multi_region`); last-writer-wins on conflicting writes, asynchronous replication |
 | REST API requests | About $3.50 per million | On, pennies at this scale |
 
 ## Repository layout
@@ -90,7 +105,8 @@ terraform/
 ├── bootstrap/            # applied manually: state bucket, permissions boundary, CI deploy role
 ├── environments/dev/     # root configuration for the dev environment
 ├── modules/              # dynamodb-table, lambda-function, rest-api, cognito-user-pool,
-│                         # apigw-dynamodb-role, dax-cluster, waf-rate-limit, cloudwatch-dashboard
+│                         # apigw-dynamodb-role, dax-cluster, waf-rate-limit, cloudwatch-dashboard,
+│                         # api-custom-domain, route53-multi-region
 └── README.md             # full technical reference and runbook
 src/save-order/           # write Lambda: source and unit tests
 src/get-order/            # read Lambda (Lambda alternative to the direct read): source and unit tests
@@ -98,7 +114,7 @@ scripts/e2e-test.sh       # end-to-end smoke test with automatic cleanup
 scripts/secret-scan.py    # secret and sensitive-data scanner (pre-commit hook and CI)
 scripts/benchmark/        # cold-start and memory benchmark (temporary function, cleans up)
 scripts/compare-reads.sh  # interleaved latency comparison: direct read vs Lambda read (cleans up)
-scripts/demo/             # behaviour checks for the cache, DAX and WAF demo (see docs/DEMO_RESULTS.md)
+scripts/demo/             # behaviour checks for the cache, DAX, WAF and multi-region demos (see docs/DEMO_RESULTS.md)
 scripts/build-dax-package.sh  # builds the read Lambda package with the DAX client (only for the optional DAX switch)
 .github/workflows/        # validate.yml and deploy.yml
 docs/                     # TESTING.md, SECRET_SCANNING.md, OPTIMIZATION_GUIDE.md, DEMO_RESULTS.md (cache, DAX and WAF demo) and the IAM policy for the engineer's SSO permission set
@@ -317,6 +333,7 @@ What this project does not do, why, and what comes next. When something ships, i
 | Feature | State |
 |---|---|
 | **API Gateway stage cache** (`enable_api_cache`) and **DAX** (`enable_dax`) | **Off by default** because they bill by the hour and make reads stale for up to their TTL. Measured in a demo: the cache saved about 6 to 7% on repeated reads, DAX saved nothing (see Performance and [DEMO_RESULTS](docs/DEMO_RESULTS.md)). |
+| **Multi-region active/active** (`enable_multi_region`) | Built, not yet applied live. Orders becomes a DynamoDB global table with a replica in `us-west-2`, a second API stack runs there, and Route 53 latency routing with health checks sends each client to the nearest healthy region at one custom name. Off by default because it bills and needs a domain; applied locally for a short demo. See [the runbook](terraform/README.md#multi-region-active-active-global-table-optional-billed-off-by-default). |
 | **WAF per-IP rate limit** (`enable_waf`) | Off by default (about $6 a month). Applied and tested live in the demo: it blocked a burst from one IP (enforcement lags the limit). Worth enabling for real traffic. |
 
 ### Out of scope on purpose

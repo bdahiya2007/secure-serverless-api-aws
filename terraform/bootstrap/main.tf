@@ -20,6 +20,9 @@ locals {
 
   table_arn    = "arn:aws:dynamodb:${local.region}:${local.account_id}:table/${var.orders_table_name}"
   function_arn = "arn:aws:lambda:${local.region}:${local.account_id}:function:${var.lambda_function_name}"
+
+  # Optional multi-region setup: the second region's replica table and Lambda log groups.
+  dr_table_arn = "arn:aws:dynamodb:${var.dr_region}:${local.account_id}:table/${var.orders_table_name}"
   log_group    = "arn:aws:logs:${local.region}:${local.account_id}:log-group:/aws/lambda/${var.lambda_function_name}"
 }
 
@@ -143,9 +146,12 @@ resource "aws_s3_bucket_policy" "state" {
 
 data "aws_iam_policy_document" "boundary" {
   statement {
-    sid       = "LambdaLogs"
-    actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
-    resources = ["arn:aws:logs:${local.region}:${local.account_id}:log-group:/aws/lambda/*"]
+    sid     = "LambdaLogs"
+    actions = ["logs:CreateLogStream", "logs:PutLogEvents"]
+    resources = [
+      "arn:aws:logs:${local.region}:${local.account_id}:log-group:/aws/lambda/*",
+      "arn:aws:logs:${var.dr_region}:${local.account_id}:log-group:/aws/lambda/*",
+    ]
   }
 
   # X-Ray write actions do not support resource-level permissions.
@@ -189,7 +195,7 @@ data "aws_iam_policy_document" "boundary" {
       "dynamodb:BatchWriteItem",
       "dynamodb:ConditionCheckItem",
     ]
-    resources = [local.table_arn, "${local.table_arn}/index/*"]
+    resources = [local.table_arn, "${local.table_arn}/index/*", local.dr_table_arn, "${local.dr_table_arn}/index/*"]
   }
 }
 

@@ -63,3 +63,32 @@ variable "app_role_boundary_name" {
   type        = string
   default     = "serverless-api-pipeline-app-role-boundary"
 }
+
+variable "enable_multi_region" {
+  description = "Make Orders a DynamoDB global table with a replica in dr_region AND run a second copy of the API (Lambda, API Gateway) there behind Route 53 latency routing (multi-region active/active). COSTS: every write is billed again in the replica region, plus a second stack, two Route 53 health checks and a few cents per hour of requests; no free tier for the health checks. Needs multi_region_domain and route53_zone_name. Applied locally (the deploy role cannot manage the second region); re-apply without it to remove."
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.enable_multi_region || (var.multi_region_domain != null && var.route53_zone_name != null)
+    error_message = "enable_multi_region needs multi_region_domain (for example api.example.com) and route53_zone_name (an existing hosted zone, for example example.com)."
+  }
+}
+
+variable "dr_region" {
+  description = "Second region for the replica and the second API stack (us-west-2 is far from us-east-1, a different failure domain)."
+  type        = string
+  default     = "us-west-2"
+}
+
+variable "multi_region_domain" {
+  description = "Name clients use for the multi-region API, for example api.example.com. It must be inside route53_zone_name and have no existing A record. Pass it at apply time; it is not committed."
+  type        = string
+  default     = null
+}
+
+variable "route53_zone_name" {
+  description = "Name of the EXISTING Route 53 public hosted zone that contains multi_region_domain. Only new records for multi_region_domain and certificate validation are added to it; existing records are never changed."
+  type        = string
+  default     = null
+}

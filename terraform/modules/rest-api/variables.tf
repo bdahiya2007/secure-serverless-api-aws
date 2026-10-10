@@ -175,3 +175,9 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "enable_health_route" {
+  description = "Add an unauthenticated GET /health route answered by API Gateway itself (a MOCK integration, free of Lambda and DynamoDB calls), for Route 53 health checks. It proves only that this region's API Gateway is up."
+  type        = bool
+  default     = false
+}
