@@ -288,13 +288,36 @@ It needs an AWS session and room for 5 parallel invocations (the account default
   multiple resource servers.
 - **Separate bootstrap stack.** Slightly more manual work, in exchange for a pipeline that cannot rewrite its own permissions.
 
-## Not implemented
+## Known limitations and roadmap
 
-List, update and delete endpoints, and **per-user ownership of orders**: today any signed-in user can read any
-order by its ID, because orders do not record an owner. Reading is limited to one order at a time. Multiple environments, multi-region
-disaster recovery, API access logs and CloudWatch alarms. Hosted sign-in with PKCE for browser clients, and
-the X-Ray SDK for DynamoDB sub-segments. The first two items are the most natural next steps. The API stage cache and DAX exist but
-are **switched off** (see Performance), and no live measurement of either has been made.
+What this project does not do, why, and what comes next. When something ships, it is removed from this list in the same pull request.
+
+### Gaps worth closing (most valuable first)
+
+| Gap | Impact | Why it is open, and the next step |
+|---|---|---|
+| **Per-user ownership of orders** | **Any signed-in user can read any order by its id.** Orders record no owner, and if the API cache is on, cached responses are shared between users. | Needs the caller's Cognito id stored on each order, reads filtered by it on both read paths, and the cache keyed by identity or skipped. It touches the Lambdas, the data model and the API, so it is a separate piece of work. **The most important next step.** |
+| **Pagination and a truncation signal** | A read returns at most 100 items. The Lambda read reports `"truncated": true`; the direct read cuts off silently, so a client cannot tell. | A small template change for the flag; pagination needs a continuation token in the API. |
+| **Alarms** | Nothing notifies anyone of errors or throttling; there is a dashboard only. The dashboard does not yet chart the read Lambda and routes. | CloudWatch alarms (the first 10 are free) with email notification. |
+| **API access logs** | Reads leave no Lambda logs, no X-Ray trace and no access log, which limits auditing. | Needs an account-wide API Gateway CloudWatch role and has a small cost, so it needs a decision first. |
+
+### Built, but switched off
+
+| Feature | State |
+|---|---|
+| **API Gateway stage cache** (`enable_api_cache`) and **DAX** (`enable_dax`) | Implemented and tested at plan level, **off by default** because they bill by the hour and make reads stale for up to their TTL. **Not yet measured on AWS**; a short, time-boxed demo would measure them (see Performance). |
+| **WAF per-IP rate limit** (`enable_waf`) | Implemented, off by default (about $6 a month), and never applied live. |
+
+### Out of scope on purpose
+
+| Not done | Why |
+|---|---|
+| Update and delete endpoints, and listing orders | The project demonstrates a create path and two read paths. A list needs a design (a `Scan` is unbounded and would expose every order), not just an endpoint. |
+| A browser front end, hosted sign-in (PKCE) and CORS | Out of scope for an API. Sign-in here uses the CLI password flow, for testing only. |
+| More environments and multi-region disaster recovery | One `dev` environment keeps cost and complexity low; DynamoDB global tables bill for every replicated write. |
+| A custom domain | Route 53 and certificate management add cost and setup that do not change the design. |
+| esbuild bundling, provisioned concurrency, an HTTP API, eventually consistent reads without DAX | Listed as not evaluated in the [optimization guide](docs/OPTIMIZATION_GUIDE.md#8-not-evaluated). |
+| The X-Ray SDK for DynamoDB sub-segments | Needs a bundled dependency, which the default package deliberately avoids. |
 
 ## Related
 
