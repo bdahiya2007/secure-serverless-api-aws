@@ -94,3 +94,12 @@ test("returns a generic 500 and does not leak error details or the id", async (t
   assert.ok(logged.includes("ProvisionedThroughputExceededException") && logged.includes("req-1"));
   assert.ok(!logged.includes("secret internal detail") && !logged.includes("o-secret-id"));
 });
+
+test("consistentRead can be turned off (needed for DAX caching) and defaults to on", async () => {
+  const calls = [];
+  const query = async (p) => { calls.push(p); return { Items: [{ itemId: "i", createdAt: "t" }] }; };
+  await createHandler({ query, tableName: "Orders", consistentRead: false })(event("o-1"), ctx);
+  await createHandler({ query, tableName: "Orders" })(event("o-1"), ctx);
+  assert.equal(calls[0].ConsistentRead, false);
+  assert.equal(calls[1].ConsistentRead, true);
+});

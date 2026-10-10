@@ -101,6 +101,23 @@ variable "log_retention_days" {
   }
 }
 
+variable "vpc_subnet_ids" {
+  description = "Subnets to run the function in (for example to reach a DAX cluster). Empty means no VPC attachment. Inside a VPC the function has no internet access, so it needs VPC endpoints or a NAT for anything else it calls."
+  type        = list(string)
+  default     = []
+}
+
+variable "vpc_security_group_ids" {
+  description = "Security groups for the function's network interfaces. Required when vpc_subnet_ids is set."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = (length(var.vpc_subnet_ids) == 0) == (length(var.vpc_security_group_ids) == 0)
+    error_message = "Set vpc_subnet_ids and vpc_security_group_ids together, or leave both empty."
+  }
+}
+
 variable "permissions_boundary" {
   description = "ARN of a permissions boundary policy for the execution role (the ceiling for what the role can ever do, even if its own policy is widened). Null for none."
   type        = string

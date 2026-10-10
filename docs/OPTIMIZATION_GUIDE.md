@@ -38,6 +38,7 @@ Environments are reused for minutes, then retired.
 | **Init warm-up and client timeouts** | Moves credential/region resolution into the boosted-CPU init phase; fails fast on hangs | Slow first-request work that can move earlier, or hangs are costly | The gain is inside the noise | No gain; rejected |
 | **Bundle and minify** (esbuild) | One small file, pinned SDK, often faster cold start | You need a pinned SDK or have many dependencies | You want no build tooling | **Not measured**; runtime SDK chosen on purpose |
 | **Provisioned concurrency** | No cold starts: environments stay initialized | A strict latency target with steady traffic | Cost matters (it bills continuously, even when idle) | **Not used or measured** |
+| **DAX** (DynamoDB Accelerator) | Serves repeated reads from memory in microseconds instead of single-digit milliseconds | Many repeated reads of hot items, the DynamoDB call is a large share of the latency, and slightly stale reads are acceptable | The reads must be strongly consistent (DAX does not cache those), the call is already a few milliseconds inside a larger request, or cost matters | Built behind a switch, **off by default**; expected to save about 1% here; not yet measured |
 | **API Gateway stage cache** | A cache hit skips the backend (Lambda or DynamoDB) | Reads of the same item repeat, and slightly old data is acceptable | Reads must reflect the latest write, results differ per user, or ids rarely repeat | Built behind a switch, **off by default**; not yet measured |
 | **Direct service integration** | One fewer service in the path; no function to run or pay for | The request is pure data mapping (key lookup, simple query) | You need validation, rules, branching or complex logic | Used for one read path; measured **30 to 40 ms slower** than the same read via Lambda, but about $0.25 per million cheaper and one fewer function to run |
 
@@ -178,6 +179,10 @@ allowance is reached first.
 
 ### Other options (computed)
 
+- **DAX** (`enable_dax`): **billed per node-hour with no free tier**, about $0.04 per hour for a small node (AWS's own example) plus about $0.01
+  per hour for the Logs endpoint the VPC Lambda needs, so about **$0.05 per hour, or about $36 a month if left running** (AWS recommends three nodes for high
+  availability, which would triple the node cost). A short demo costs cents.
+
 - **API Gateway stage cache** (`enable_api_cache`): billed **by the hour even when idle, and not free-tier eligible**. AWS's own
   example is $0.038 per hour for 1.6 GB, about $27 a month; the smallest 0.5 GB size is cheaper (about $0.02 per hour, about $15 a
   month, **unverified**). A cache hit saves the backend's share of a request, not the network round trip.
@@ -200,6 +205,18 @@ allowance is reached first.
 | Hand-written type conversion | Slim imports (rejected) | Not shipped | It would need its own tests, because conversion bugs can corrupt or mis-type data |
 | Retry storms or hangs | Client timeouts (rejected) | SDK defaults apply | Too-aggressive timeouts can amplify load through retries |
 | Slightly higher cost per abused cold request | 512 MB | Throttle (5 rps, burst 10), Cognito auth, optional WAF, budget alerts | See the worst-case figure in section 4 |
+
+### DAX (when switched on)
+
+| Risk | How it is handled here | Residual |
+|---|---|---|
+| **Stale and empty results** | Query TTL is 60 s, the cluster is off by default, and the docs state it | Writes do not invalidate cached queries, and an empty result is cached too, so a read right after a write can be wrong for up to the TTL |
+| **Reads lose the read-your-writes guarantee** | Only the read Lambda uses DAX, and only while the switch is on | Strongly consistent reads cannot be cached, so DAX forces eventually consistent reads |
+| **Who can reach the cluster** | A security group allows only the Lambda, on the encrypted port; the cluster is encrypted at rest and clients use TLS | Anyone with the Lambda's network position and `dax:Query` could read cached orders |
+| **Over-broad roles** | The DAX service role is read-only on one table, the Lambda role has `dax:Query` on one cluster, and both sit under the permissions boundary | The boundary now also allows VPC network interface actions on `*` (an AWS limitation) |
+| **A new dependency in the Lambda** | Pinned in a committed lockfile with integrity hashes, installed with scripts disabled, and only built when DAX is on | 63 transitive packages enter the function while it is on; their vulnerabilities become yours |
+| **Less visibility** | The read backend is logged at start-up | X-Ray traces are unavailable while the function is in the VPC (no X-Ray endpoint) |
+| **Cost left running** | Off by default, and `deploy.yml` refuses to run while DAX is in the state | Left on by hand it bills every hour |
 
 ### API Gateway stage cache (when switched on)
 
@@ -247,6 +264,7 @@ allowance is reached first.
 
 ## 8. Not evaluated
 
-esbuild bundling, provisioned concurrency, an HTTP API instead of a REST API (a different feature set and price), and an
-eventually consistent read. (A Lambda-based read of the same data now exists for the like-for-like latency comparison; see
+esbuild bundling, provisioned concurrency, an HTTP API instead of a REST API (a different feature set and price), an
+eventually consistent read without DAX, and the measured effect of DAX and of the API cache (both are built behind switches that default to off,
+and a time-boxed demo would measure them). (A Lambda-based read of the same data now exists for the like-for-like latency comparison; see
 section 3.3.)

@@ -52,6 +52,25 @@ data "aws_iam_policy_document" "permissions" {
     }
   }
 
+  # Creating the function's network interfaces in a VPC needs these EC2 actions, which do not support resource-level
+  # permissions (an AWS limitation), so "*" is unavoidable. Added only when the function is attached to a VPC.
+  dynamic "statement" {
+    for_each = length(var.vpc_subnet_ids) > 0 ? [1] : []
+
+    content {
+      sid = "VpcNetworkInterfaces"
+      actions = [
+        "ec2:CreateNetworkInterface",
+        "ec2:DescribeNetworkInterfaces",
+        "ec2:DescribeSubnets",
+        "ec2:DeleteNetworkInterface",
+        "ec2:AssignPrivateIpAddresses",
+        "ec2:UnassignPrivateIpAddresses",
+      ]
+      resources = ["*"]
+    }
+  }
+
   dynamic "statement" {
     for_each = var.policy_statements
 
@@ -88,6 +107,15 @@ resource "aws_lambda_function" "this" {
 
     content {
       variables = var.environment_variables
+    }
+  }
+
+  dynamic "vpc_config" {
+    for_each = length(var.vpc_subnet_ids) > 0 ? [1] : []
+
+    content {
+      subnet_ids         = var.vpc_subnet_ids
+      security_group_ids = var.vpc_security_group_ids
     }
   }
 

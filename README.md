@@ -43,7 +43,7 @@ flowchart LR
 
 ## What this demonstrates
 
-- **Infrastructure as code, modular:** seven reusable Terraform modules with validated inputs and plan-time guardrails.
+- **Infrastructure as code, modular:** eight reusable Terraform modules with validated inputs and plan-time guardrails.
 - **Direct service integration:** API Gateway reads DynamoDB with no Lambda, using VTL mapping templates and a read-only role.
 - **Security by default:** least-privilege IAM, a permissions boundary, no stored credentials, defense in depth on input.
 - **Cost awareness:** idle cost is about $0, and every billed feature is off until deliberately enabled.
@@ -78,6 +78,7 @@ free AWS-published data. Anything billed is off by default and documented:
 |---|---|---|
 | AWS WAF per-IP rate limit | About $6/month while attached, billed hourly | Off (`enable_waf`) |
 | DynamoDB point-in-time recovery | Per GB stored | Off |
+| DynamoDB Accelerator (DAX), one node | About $0.05 per hour while on (node plus a Logs endpoint), with no free tier | Off (`enable_dax`); reads become eventually consistent and can be stale when on |
 | API Gateway stage cache (300 s TTL) | Billed by the hour even when idle (not free-tier eligible) | Off (`enable_api_cache`); reads can be stale for up to the TTL when on |
 | REST API requests | About $3.50 per million | On, pennies at this scale |
 
@@ -88,7 +89,7 @@ terraform/
 ├── bootstrap/            # applied manually: state bucket, permissions boundary, CI deploy role
 ├── environments/dev/     # root configuration for the dev environment
 ├── modules/              # dynamodb-table, lambda-function, rest-api, cognito-user-pool,
-│                         # apigw-dynamodb-role, waf-rate-limit, cloudwatch-dashboard
+│                         # apigw-dynamodb-role, dax-cluster, waf-rate-limit, cloudwatch-dashboard
 └── README.md             # full technical reference and runbook
 src/save-order/           # write Lambda: source and unit tests
 src/get-order/            # read Lambda (Lambda alternative to the direct read): source and unit tests
@@ -96,6 +97,7 @@ scripts/e2e-test.sh       # end-to-end smoke test with automatic cleanup
 scripts/secret-scan.py    # secret and sensitive-data scanner (pre-commit hook and CI)
 scripts/benchmark/        # cold-start and memory benchmark (temporary function, cleans up)
 scripts/compare-reads.sh  # interleaved latency comparison: direct read vs Lambda read (cleans up)
+scripts/build-dax-package.sh  # builds the read Lambda package with the DAX client (only for the optional DAX switch)
 .github/workflows/        # validate.yml and deploy.yml
 docs/                     # TESTING.md, SECRET_SCANNING.md, OPTIMIZATION_GUIDE.md and the IAM policy for the engineer's SSO permission set
 ```
@@ -135,7 +137,7 @@ The Lambda version, `GET /orders-via-lambda/{orderId}`, returns the same data wi
 invalid id (a Lambda can validate ids with an allow-list, while the direct read treats any id as a lookup and returns 404).
 
 The full [testing guide](docs/TESTING.md) covers unit tests, an end-to-end script that cleans up after itself,
-observability checks and the pipeline. The two Lambdas have 23 unit tests using Node's built-in runner and no
+observability checks and the pipeline. The two Lambdas have 28 unit tests using Node's built-in runner and no
 dependencies:
 
 ```bash

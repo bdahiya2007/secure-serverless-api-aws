@@ -18,7 +18,7 @@ for the unit tests. The API must already be deployed (see [terraform/README.md](
 ## 1. Unit tests
 
 ```bash
-node --test "src/*/*.test.mjs"               # expect 23 passing (both Lambdas)
+node --test "src/*/*.test.mjs"               # expect 28 passing (both Lambdas)
 ```
 
 Pass the **glob in quotes**. `node --test src/save-order/` (a folder) fails because Node treats it as a module path. `src/*/*.test.mjs` covers both Lambdas (`save-order` and `get-order`).
@@ -159,6 +159,29 @@ path equally. It prints a Markdown table and always removes its temporary user a
 so compare the paths with each other, not with a browser. Results and what they mean are in the
 [optimization guide](OPTIMIZATION_GUIDE.md).
 
+### With DAX on (optional, billed)
+
+Turn it on only for a short test. The prerequisites, the cost and the on and off commands are in
+[terraform/README.md](../terraform/README.md#dynamodb-accelerator-dax-optional-billed-off-by-default). Once the cluster is `available`:
+
+```bash
+# 1. The function chose DAX (log line written at start-up, through the Logs endpoint)
+aws logs tail /aws/lambda/save-order-lookup --since 10m | grep "read backend selected"     # backend "dax", consistentRead false
+
+# 2. Hits: repeated reads of one order. The first goes to DynamoDB, later ones are served by DAX.
+BASE=${URL%/orders}
+for i in 1 2 3 4 5; do curl -s -o /dev/null -w '%{time_total}\n' -H "Authorization: $TOK" "$BASE/orders-via-lambda/t-1"; done
+
+# 3. Stale read: add an item to an order that was just read, then read it again within the TTL (60 s by default).
+curl -s -X POST "$URL" -H "Content-Type: application/json" -H "Authorization: $TOK" -d '{"orderId":"t-1","itemId":"i-9"}'
+curl -s -H "Authorization: $TOK" "$BASE/orders-via-lambda/t-1" | grep -o '"itemCount":[0-9]*'      # the OLD count until the TTL expires
+sleep 61; curl -s -H "Authorization: $TOK" "$BASE/orders-via-lambda/t-1" | grep -o '"itemCount":[0-9]*'   # now the new count
+```
+
+Then compare latency with `./scripts/compare-reads.sh` (run it with DAX off and on and compare the "Lambda minus direct" line; it is the
+difference within one run, so network drift cancels). Turn DAX off afterwards (`terraform apply` without the variable) and confirm
+`terraform output dax_enabled` is `false`. `./scripts/e2e-test.sh` can fail on a read right after a write while DAX is on, because reads are eventually consistent.
+
 ### With the API cache on (optional, billed)
 
 Turn it on only for a short test (see [terraform/README.md](../terraform/README.md#api-gateway-stage-cache-optional-billed-off-by-default)).
@@ -233,7 +256,9 @@ about a minute. Note that a push to `main` also removes the WAF, because `deploy
 | `Backend initialization required` | Run `terraform init -reconfigure -backend-config="bucket=$(terraform -chdir=../../bootstrap output -raw state_bucket)"`. |
 | `The security token included in the request is expired` (AWS CLI) | Run `aws sso login` again. |
 | Dashboard looks empty | Metrics lag by a minute or two, and the default time range may not include your calls. |
-| A read shows old data right after a write | The API cache is on and its TTL has not expired (up to 300 s). Flush it, or turn the cache off. |
+| A read shows old data right after a write | The API cache (up to 300 s) or DAX (the query TTL, 60 s by default) is on and its TTL has not expired. Flush the API cache, wait for the TTL, or turn the switch off. |
+| `enable_dax needs the read Lambda's package` when planning | Run `./scripts/build-dax-package.sh` first. |
+| The read Lambda fails to start after enabling DAX | Check its logs for `Cannot find package` (the package was not built) or a connection error (the security groups, or the cluster is not `available` yet). |
 | `node --test` finds no tests | Use the quoted glob: `node --test "src/*/*.test.mjs"`. |
 | `400 {"message":"Invalid order id",...}` on `/orders-via-lambda/...` | The id failed the Lambda's allow-list (letters, numbers, `.`, `_`, `-`, 1 to 128 characters). The direct read would return 404 for the same id. |
 | `iam:PassRole` access denied when deploying | A direct integration needs the permission set and the CI deploy role to pass roles to `apigateway.amazonaws.com`. See "Reading orders" in [terraform/README.md](../terraform/README.md). |

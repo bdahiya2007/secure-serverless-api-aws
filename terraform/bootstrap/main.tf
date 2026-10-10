@@ -155,9 +155,31 @@ data "aws_iam_policy_document" "boundary" {
     resources = ["*"]
   }
 
+  # Optional DAX demo: a Lambda in a VPC needs network interfaces, and reads through the cluster with dax:* actions.
+  # EC2 network interface actions do not support resource-level permissions.
+  statement {
+    sid = "LambdaVpcNetworking"
+    actions = [
+      "ec2:CreateNetworkInterface",
+      "ec2:DescribeNetworkInterfaces",
+      "ec2:DescribeSubnets",
+      "ec2:DeleteNetworkInterface",
+      "ec2:AssignPrivateIpAddresses",
+      "ec2:UnassignPrivateIpAddresses",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid       = "DaxClientReads"
+    actions   = ["dax:Query", "dax:GetItem", "dax:BatchGetItem"]
+    resources = ["arn:aws:dax:${local.region}:${local.account_id}:cache/${var.dax_cluster_name}"]
+  }
+
   statement {
     sid = "OrdersTableData"
     actions = [
+      "dynamodb:DescribeTable", # DAX reads the table's schema
       "dynamodb:PutItem",
       "dynamodb:GetItem",
       "dynamodb:UpdateItem",

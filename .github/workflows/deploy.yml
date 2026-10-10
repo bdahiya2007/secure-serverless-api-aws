@@ -85,6 +85,17 @@ jobs:
 
       # The job summary lists only what will change (action + resource address), never ARNs or
       # IDs, because this repository is public. The full plan is in the "Terraform plan" step log.
+      # DAX (and its VPC pieces) are a billed demo applied locally: the deploy role has no DAX or EC2 permissions. If they are
+      # still in the state, this plan would try to remove them and fail halfway, so stop first with an explanation.
+      - name: Stop if DAX is still switched on
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          n=$(terraform show -json tfplan | jq '[.resource_changes[] | select(.address | test("orders_dax|dax_package_check")) | select(.change.actions != ["no-op"])] | length')
+          if [ "$n" -gt 0 ]; then
+            echo "::error::DAX resources are in the state and this plan would change them, but the deploy role cannot manage DAX. Turn DAX off locally first (terraform apply without -var enable_dax=true), then re-run."
+            exit 1
+          fi
+
       - name: Summarize plan
         working-directory: ${{ env.WORKDIR }}
         run: |

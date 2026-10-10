@@ -33,6 +33,11 @@ output "user_pool_client_id" {
   value       = module.orders_user_pool.client_id
 }
 
+output "dax_enabled" {
+  description = "Whether the (billed) DAX cluster is on and the read Lambda reads through it."
+  value       = var.enable_dax
+}
+
 output "rest_api_id" {
   description = "ID of the orders REST API (for commands such as flushing the stage cache)."
   value       = module.orders_api.rest_api_id

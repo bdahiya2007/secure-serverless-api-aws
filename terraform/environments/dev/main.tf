@@ -47,6 +47,61 @@ module "save_order_function" {
   ]
 }
 
+# ---------------------------------------------------------------------------
+# Optional DAX (DynamoDB Accelerator), OFF by default: BILLED per node-hour with no free tier. When on, the read
+# Lambda moves into the default VPC and reads through the cluster with eventually consistent reads.
+# ---------------------------------------------------------------------------
+
+data "aws_vpc" "default" {
+  count   = var.enable_dax ? 1 : 0
+  default = true
+}
+
+data "aws_subnets" "default" {
+  count = var.enable_dax ? 1 : 0
+
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default[0].id]
+  }
+
+  filter {
+    name   = "default-for-az"
+    values = ["true"]
+  }
+}
+
+locals {
+  # One subnet is enough for a single-node demo cluster (high availability would need three nodes in three zones).
+  dax_subnet_ids = var.enable_dax ? [sort(data.aws_subnets.default[0].ids)[0]] : []
+}
+
+# Stops the plan with a clear message when DAX is switched on but the package with the DAX client was not built.
+resource "terraform_data" "dax_package_check" {
+  count = var.enable_dax ? 1 : 0
+
+  lifecycle {
+    precondition {
+      condition     = fileexists("${path.root}/../../../build/get-order-dax/node_modules/@amazon-dax-sdk/lib-dax/package.json")
+      error_message = "enable_dax needs the read Lambda's package with the DAX client. Run ./scripts/build-dax-package.sh first."
+    }
+  }
+}
+
+module "orders_dax" {
+  count  = var.enable_dax ? 1 : 0
+  source = "../../modules/dax-cluster"
+
+  name                 = "save-order-dax"
+  table_arn            = module.orders_table.table_arn
+  vpc_id               = data.aws_vpc.default[0].id
+  subnet_ids           = local.dax_subnet_ids
+  node_type            = var.dax_node_type
+  query_ttl_seconds    = var.dax_query_ttl_seconds
+  record_ttl_seconds   = var.dax_query_ttl_seconds
+  permissions_boundary = local.app_role_boundary_arn
+}
+
 # Lambda-based alternative to the direct DynamoDB read, so both styles exist for the same operation and can be
 # compared. Named with the save-order- prefix so the pipeline's IAM scope (save-order-*) covers its role and function.
 module "get_order_function" {
@@ -54,22 +109,38 @@ module "get_order_function" {
 
   function_name = "save-order-lookup"
   description   = "Reads an order's items from DynamoDB (Lambda alternative to the direct integration)"
-  source_dir    = "${path.root}/../../../src/get-order"
-  handler       = "index.handler"
-  memory_size   = 512 # same as save-order, so the comparison with the direct read is fair
+  # With DAX on, the package built by scripts/build-dax-package.sh (it includes the DAX client); otherwise the plain source.
+  source_dir  = var.enable_dax ? "${path.root}/../../../build/get-order-dax" : "${path.root}/../../../src/get-order"
+  handler     = "index.handler"
+  memory_size = 512 # same as save-order, so the comparison with the direct read is fair
 
-  environment_variables = {
-    TABLE_NAME = module.orders_table.table_name
-  }
+  # DAX_ENDPOINT switches the function to DAX (eventually consistent reads); without it nothing changes.
+  environment_variables = merge(
+    { TABLE_NAME = module.orders_table.table_name },
+    var.enable_dax ? { DAX_ENDPOINT = module.orders_dax[0].client_endpoint } : {},
+  )
 
-  # Least privilege: Query on one table. No write, no scan.
-  policy_statements = [
-    {
-      sid       = "QueryOrderItems"
-      actions   = ["dynamodb:Query"]
-      resources = [module.orders_table.table_arn]
-    }
-  ]
+  # DAX is reached from inside the VPC.
+  vpc_subnet_ids         = local.dax_subnet_ids
+  vpc_security_group_ids = var.enable_dax ? [module.orders_dax[0].client_security_group_id] : []
+
+  # Least privilege: Query on one table (plus the same Query through DAX when it is on). No write, no scan.
+  policy_statements = concat(
+    [
+      {
+        sid       = "QueryOrderItems"
+        actions   = ["dynamodb:Query"]
+        resources = [module.orders_table.table_arn]
+      }
+    ],
+    var.enable_dax ? [
+      {
+        sid       = "QueryThroughDax"
+        actions   = ["dax:Query"]
+        resources = [module.orders_dax[0].cluster_arn]
+      }
+    ] : [],
+  )
 
   enable_xray_tracing  = true
   permissions_boundary = local.app_role_boundary_arn

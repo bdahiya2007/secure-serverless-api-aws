@@ -24,7 +24,7 @@
       "Resource": "arn:aws:iam::ACCOUNT_ID:role/save-order-*"
     },
     {
-      "Sid": "PassAppRolesToLambdaAndApiGateway",
+      "Sid": "PassAppRolesToLambdaApiGatewayAndDax",
       "Effect": "Allow",
       "Action": "iam:PassRole",
       "Resource": "arn:aws:iam::ACCOUNT_ID:role/save-order-*",
@@ -32,7 +32,8 @@
         "StringEquals": {
           "iam:PassedToService": [
             "lambda.amazonaws.com",
-            "apigateway.amazonaws.com"
+            "apigateway.amazonaws.com",
+            "dax.amazonaws.com"
           ]
         }
       }
