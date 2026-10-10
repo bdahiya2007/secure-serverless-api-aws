@@ -65,6 +65,7 @@ flowchart LR
 | **State** | Private, versioned, encrypted S3 bucket with TLS-only access and native locking. State and variable files are never committed. |
 | **Account hardening** | S3 Block Public Access on for the whole account, deletion protection on the table and user pool. |
 | **Repository** | Branch protection (admins included), required pull requests, secret scanning with push protection, GitHub Actions pinned by commit SHA. |
+| **Optional speed-ups (off by default)** | The API Gateway stage cache and DAX are built behind switches that default to **off**, because they bill by the hour and trade freshness for speed. Cache entries are keyed by the order id, encrypted, and cannot be bypassed with `Cache-Control`; DAX sits behind a security group that admits only the read Lambda, with a read-only role and a TLS endpoint. When on, a read can be stale for up to the TTL after a write, and all signed-in users share cached responses. |
 | **Leak prevention** | A pre-commit hook and a CI job scan for credentials, AWS account and resource IDs, personal data and state or key files, and redact what they report ([details](docs/SECRET_SCANNING.md)). |
 | **Error and log hygiene** | 500 responses are generic, and logs record the error type and request ID, never order contents. |
 
@@ -225,6 +226,16 @@ $0.25 per million requests and a function to run, and it has no Lambda cold star
 environment). The Lambda read also validates ids, flags truncation, and leaves logs and traces. Why the direct integration is
 slower is an informed guess, not a measurement; see the [optimization guide](docs/OPTIMIZATION_GUIDE.md#33-direct-read-against-lambda-read-like-for-like).
 
+### Caching options (built, off by default, not yet measured)
+
+Two further speed-ups are built behind switches that default to **off**: an **API Gateway stage cache** (`enable_api_cache`, 300 s TTL)
+and a **DAX cluster** for the read Lambda (`enable_dax`, 60 s TTL). Both bill by the hour with no free tier (about $0.02 and $0.05 per hour), and both
+make reads **stale for up to their TTL after a write**. DAX also cannot cache the strongly consistent read this API uses, so enabling it makes the read
+eventually consistent. From the measurements above, DAX could save only a few milliseconds of a roughly 320 ms request (the function takes about 6 ms in
+total), while the API cache could save the backend's share on repeated reads. Neither has been run on AWS yet; a short, time-boxed demo would measure them.
+The costs, the stale-read behaviour and the risks are in the [optimization guide](docs/OPTIMIZATION_GUIDE.md) and the
+[runbook](terraform/README.md#dynamodb-accelerator-dax-optional-billed-off-by-default).
+
 ### Cost and security trade-offs
 
 - **Cost:** API Gateway at about **$3.50 per million requests** is 80 to 96% of any request's cost, so Lambda tuning moves
@@ -282,7 +293,8 @@ It needs an AWS session and room for 5 parallel invocations (the account default
 List, update and delete endpoints, and **per-user ownership of orders**: today any signed-in user can read any
 order by its ID, because orders do not record an owner. Reading is limited to one order at a time. Multiple environments, multi-region
 disaster recovery, API access logs and CloudWatch alarms. Hosted sign-in with PKCE for browser clients, and
-the X-Ray SDK for DynamoDB sub-segments. The first two items are the most natural next steps.
+the X-Ray SDK for DynamoDB sub-segments. The first two items are the most natural next steps. The API stage cache and DAX exist but
+are **switched off** (see Performance), and no live measurement of either has been made.
 
 ## Related
 
