@@ -342,10 +342,11 @@ What this project does not do, why, and what comes next. When something ships, i
 | Not done | Why |
 |---|---|
 | Update and delete endpoints, and listing orders | The project demonstrates a create path and two read paths. A list needs a design (a `Scan` is unbounded and would expose every order), not just an endpoint. |
-| A browser front end, hosted sign-in (PKCE) and CORS | Out of scope for an API. Sign-in here uses the CLI password flow, for testing only. |
-| More environments and multi-region disaster recovery | One `dev` environment keeps cost and complexity low; DynamoDB global tables bill for every replicated write. |
-| A custom domain | Route 53 and certificate management add cost and setup that do not change the design. |
-| esbuild bundling, provisioned concurrency, an HTTP API, eventually consistent reads without DAX | Listed as not evaluated in the [optimization guide](docs/OPTIMIZATION_GUIDE.md#8-not-evaluated). |
+| A browser front end and CORS | Out of scope for an API. |
+| More environments (staging, prod) | One `dev` environment keeps cost and complexity low. Multi-region is built as an optional, off-by-default switch (see [Built, but switched off](#built-but-switched-off) and [DISASTER_RECOVERY.md](docs/DISASTER_RECOVERY.md)), but there is no separate production environment, state or approval path. |
+| A custom domain **in the default setup** | The API uses its default `execute-api` URL. A custom domain with a free certificate per region exists only inside the optional multi-region switch, because Route 53 needs an existing hosted zone and the names are not committed. |
+| A federated or production sign-in design | Sign-in uses one Cognito pool and the CLI password flow, for testing. Federation with an identity provider, hosted sign-in (PKCE) and a pool per region are described in [DISASTER_RECOVERY.md](docs/DISASTER_RECOVERY.md#known-gaps-and-what-to-do-before-relying-on-this) but not built. |
+| esbuild bundling, provisioned concurrency, an HTTP API, eventually consistent reads without DAX, the cache with many distinct ids | Listed as not evaluated in the [optimization guide](docs/OPTIMIZATION_GUIDE.md#8-not-evaluated). |
 | The X-Ray SDK for DynamoDB sub-segments | Needs a bundled dependency, which the default package deliberately avoids. |
 
 ## Related
