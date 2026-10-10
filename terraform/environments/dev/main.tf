@@ -30,6 +30,10 @@ module "save_order_function" {
     TABLE_NAME = module.orders_table.table_name
   }
 
+  # 512 MB chosen from a benchmark (scripts/benchmark, see README "Performance"): cold request 1.28 s to 0.51 s,
+  # warm 70 ms to 11 ms versus 128 MB; cost stays inside the free tier.
+  memory_size = 512
+
   enable_xray_tracing  = true # free tier covers learning volumes; set false to disable
   permissions_boundary = local.app_role_boundary_arn
 
