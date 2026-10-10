@@ -200,7 +200,7 @@ curl -s -H "Authorization: $TOK" "$BASE/orders/t-2" | head -c 120; echo
 curl -s -X POST "$URL" -H "Content-Type: application/json" -H "Authorization: $TOK" -d '{"orderId":"t-1","itemId":"i-9"}'
 curl -s -H "Authorization: $TOK" "$BASE/orders/t-1" | grep -o '"itemCount": *[0-9]*'     # the old count until the TTL expires
 
-# Flush the cache to see the new data at once
+# Flush the cache to see the new data (the flush takes about 50 s to take effect; read again after a minute)
 aws apigateway flush-stage-cache --rest-api-id "$(terraform -chdir=terraform/environments/dev output -raw rest_api_id)" --stage-name dev
 ```
 
