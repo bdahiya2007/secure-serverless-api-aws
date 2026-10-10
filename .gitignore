@@ -53,3 +53,6 @@ Thumbs.db
 
 # --- Local-only tracking files (a private working list, never pushed) ---
 TODO.md
+
+# Built Lambda package that includes the DAX client (scripts/build-dax-package.sh)
+build/

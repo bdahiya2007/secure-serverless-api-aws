@@ -31,7 +31,8 @@ export function toItem(item) {
 }
 
 // query: async (params) => ({ Items, LastEvaluatedKey })
-export function createHandler({ query, tableName }) {
+// consistentRead: strongly consistent reads see the latest write but cannot be cached by DAX, which passes them through.
+export function createHandler({ query, tableName, consistentRead = true }) {
   return async function handler(event, context) {
     const { orderId, error } = parseOrderId(event);
     if (error) return response(400, { message: "Invalid order id", errors: [error] });
@@ -43,7 +44,7 @@ export function createHandler({ query, tableName }) {
         // The id is a value, never part of the expression.
         KeyConditionExpression: "orderId = :orderId",
         ExpressionAttributeValues: { ":orderId": orderId },
-        ConsistentRead: true, // a client reads back what it just wrote
+        ConsistentRead: consistentRead, // true: a client reads back what it just wrote
         Limit: MAX_ITEMS,
       });
     } catch (err) {

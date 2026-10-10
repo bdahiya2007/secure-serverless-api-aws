@@ -70,6 +70,12 @@ variable "lambda_function_name" {
   default     = "save-order"
 }
 
+variable "dax_cluster_name" {
+  description = "Name of the optional DAX cluster whose data-plane actions application roles may use."
+  type        = string
+  default     = "save-order-dax"
+}
+
 variable "app_role_prefix" {
   description = "Name prefix of application IAM roles the pipeline may create (each must carry the boundary)."
   type        = string

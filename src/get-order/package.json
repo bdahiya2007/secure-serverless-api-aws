@@ -1,0 +1,10 @@
+{
+  "name": "get-order",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Reads an order's items. The DAX client is an optional dependency, installed only by scripts/build-dax-package.sh when DAX is switched on.",
+  "dependencies": {
+    "@amazon-dax-sdk/lib-dax": "3.1.0"
+  }
+}

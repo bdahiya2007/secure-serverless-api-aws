@@ -19,6 +19,7 @@ terraform/
     ├── rest-api/                  # REST API: Lambda proxy routes (optionally with a child path), direct DynamoDB routes, validation, throttling, Cognito authorizer
     ├── apigw-dynamodb-role/       # read-only role API Gateway assumes to query one DynamoDB table
     ├── cognito-user-pool/         # Cognito user pool + public app client
+    ├── dax-cluster/               # optional DAX cluster, its role, security groups and a Logs endpoint (billed; off by default)
     ├── waf-rate-limit/            # optional WAF per-IP rate limit (billed; off by default)
     └── cloudwatch-dashboard/      # API Gateway Count/4XXError, Lambda Invocations/Errors
 src/save-order/                    # write Lambda: Node.js code and unit tests
@@ -26,6 +27,7 @@ src/get-order/                     # read Lambda (alternative to the direct read
 .github/workflows/                 # validate.yml (PRs, no AWS) and deploy.yml (push to main, OIDC + approval)
 scripts/e2e-test.sh                # end-to-end smoke test with automatic cleanup
 scripts/compare-reads.sh           # interleaved latency comparison: direct read vs Lambda read (cleans up)
+scripts/build-dax-package.sh       # builds the read Lambda package with the DAX client (only for the optional DAX switch)
 scripts/secret-scan.py             # secret / sensitive-data scanner (pre-commit hook and CI)
 scripts/benchmark/                 # cold-start and memory benchmark (temporary function, cleans up)
 docs/TESTING.md                    # how to test: unit, end-to-end, observability, pipeline, WAF
@@ -190,6 +192,54 @@ Set `enable_xray_tracing = false` in `environments/dev/main.tf` to turn it off.
 Limits: tracing starts at the Lambda (API Gateway stage tracing is not enabled), and DynamoDB calls do not
 appear as separate nodes because that needs the X-Ray SDK bundled into the function (an npm dependency).
 
+## DynamoDB Accelerator, DAX (optional, billed, OFF by default)
+
+DAX is an in-memory cache for DynamoDB. With the switch on, the read Lambda (`save-order-lookup`) reads through a DAX cluster instead
+of calling DynamoDB. **It is billed by the node-hour with no free tier**, so it is off by default.
+
+| Setting | Value |
+|---|---|
+| Switch | `enable_dax` (default `false`); `dax_node_type` (default `dax.t3.small`); `dax_query_ttl_seconds` (default **60**) |
+| Cluster | One node in one subnet of the default VPC, encrypted at rest, clients connect over TLS (`daxs://`, port 9111). One node is for demos only; high availability needs three. |
+| What changes when on | The read Lambda moves into the VPC, gets `DAX_ENDPOINT` and `dax:Query`, and its reads become **eventually consistent** (DAX cannot cache strongly consistent reads). Nothing else changes: with the switch off the function uses DynamoDB exactly as before. |
+| Roles | A read-only DAX service role (`save-order-dax-role`: `DescribeTable`, `Query`, `GetItem`, `BatchGetItem` on the Orders table); the Lambda role gets `dax:Query` on the cluster |
+| Network | The Lambda has no internet access inside the VPC, so a CloudWatch Logs interface endpoint is created for its logs. Security groups allow only the Lambda to reach the cluster. |
+| Package | The DAX client is not in the Lambda runtime, so `./scripts/build-dax-package.sh` installs it from a committed lockfile (install scripts disabled) into `build/get-order-dax`: 696 files, 4.8 MB (1.4 MB zipped), against about 2 KB for the default package. Terraform zips that instead only when the switch is on. |
+| Approximate cost | About **$0.04 per node-hour** (AWS's example node type) plus about **$0.01 per hour** for the Logs endpoint: roughly **$0.05 per hour while on**, or about $36 a month if left running. Prices not re-verified for the node type and endpoint. |
+
+**One-time prerequisites (manual, before the first demo):**
+1. Update the permission set with [docs/permission-set-inline-policy.json](../docs/permission-set-inline-policy.json): its pass-role statement now also
+   allows `dax.amazonaws.com`. Reprovision the account and run `aws sso login`.
+2. Apply the bootstrap (`cd terraform/bootstrap && terraform apply`, a 1-change plan): the permissions boundary now allows the VPC network
+   interface actions, `dax:Query`, `dax:GetItem`, `dax:BatchGetItem` on the cluster, and `dynamodb:DescribeTable`.
+
+**Demo, then turn it off:**
+
+```bash
+./scripts/build-dax-package.sh                     # builds build/get-order-dax with the DAX client
+cd terraform/environments/dev
+terraform apply -var enable_dax=true               # billing starts; creating a cluster takes a while (about 10 to 20 minutes)
+aws logs tail /aws/lambda/save-order-lookup --since 5m    # look for {"message":"read backend selected","backend":"dax",...}
+cd ../../.. && ./scripts/compare-reads.sh          # repeated reads of one order: DAX hits
+cd terraform/environments/dev
+terraform apply                                    # REMOVE it: re-apply WITHOUT the variable
+terraform output dax_enabled                       # must print false
+```
+
+**Trade-offs, read before turning it on:**
+- **It cannot speed up a strongly consistent read**, which is what this API uses by default so a client reads back what it just wrote. DAX passes those
+  reads straight to DynamoDB without caching them. That is why the switch also makes the read eventually consistent.
+- **Stale and empty results.** DAX caches `Query` results for the TTL and does **not** invalidate them when an item is written (our writes go straight to
+  DynamoDB, and even writes through DAX do not refresh the query cache). It also caches an empty result. After a `POST`, a read can show the old list, or "not found", for up to
+  `dax_query_ttl_seconds`.
+- **Little to gain here.** The read function runs in about 6 ms in total, including its DynamoDB call, in a request of about 320 ms that is mostly network, so DAX can save
+  at most a few milliseconds (about 1%). Whether it does is what the demo measures.
+- **More moving parts:** a VPC, security groups, an endpoint, a bundled dependency and a larger package. X-Ray traces from the function are unavailable while it is in the VPC unless an X-Ray endpoint is added (not done).
+- **The pipeline cannot manage it.** The CI deploy role has no DAX or EC2 permissions, so apply and remove it locally. `deploy.yml` stops with a clear message if DAX is still in the
+  state, so turn it off locally first.
+
+See [TESTING.md](../docs/TESTING.md) for how to verify it and the [optimization guide](../docs/OPTIMIZATION_GUIDE.md) for cost and security.
+
 ## API Gateway stage cache (optional, billed, OFF by default)
 
 A stage cache answers repeated `GET` requests without calling the backend. It is **billed by the hour even when idle and is not
@@ -304,7 +354,7 @@ aws cognito-idp admin-delete-user --user-pool-id "$POOL" --username "$EMAIL"
 ## Tests
 
 See the [testing guide](../docs/TESTING.md) for every level, including `./scripts/e2e-test.sh`, which runs the
-API's success and failure cases against the deployed stack and removes its own test data. The two Lambdas have 23 unit tests using Node's built-in runner (no dependencies, Node 22+). The AWS call is
+API's success and failure cases against the deployed stack and removes its own test data. The two Lambdas have 28 unit tests using Node's built-in runner (no dependencies, Node 22+). The AWS call is
 injected, so no AWS access is needed. CI runs them on every pull request.
 
 ```bash
@@ -317,7 +367,7 @@ node --test "src/*/*.test.mjs"
 bootstrap resources. Add [docs/permission-set-inline-policy.json](../docs/permission-set-inline-policy.json) as an
 inline policy on the permission set (IAM Identity Center -> Permission sets -> PowerUserAccess -> Inline
 policy), reprovision the account, and run `aws sso login` again. The file uses `ACCOUNT_ID` as a placeholder so
-the account ID is not published; print a ready-to-paste copy with:
+the account ID is not published (the pass-role statement also allows `dax.amazonaws.com`, needed only for the optional DAX demo); print a ready-to-paste copy with:
 
 ```bash
 sed "s/ACCOUNT_ID/$(aws sts get-caller-identity --query Account --output text)/" docs/permission-set-inline-policy.json
@@ -433,4 +483,5 @@ which is git-ignored; keep that file safe. `*.tfstate` and `*.tfvars` are never 
 - Extra CloudWatch dashboards (beyond 3 free), logs-insights widgets, custom metrics — billed; not used.
 - `enable_api_cache` — the API Gateway stage cache, billed by the hour while on (about $0.02 per hour for 0.5 GB, unverified); off by default.
 - API access logs, custom domain, WAF logging and managed rule groups — not enabled.
-- Dead-letter queue, CloudWatch alarms, VPC attachment (needs a NAT gateway) — not enabled.
+- `enable_dax` — a DAX cluster plus a Logs endpoint, billed per hour while on (about $0.05 per hour, with no free tier); off by default. The read Lambda joins the VPC only while it is on.
+- Dead-letter queue, CloudWatch alarms — not enabled.
