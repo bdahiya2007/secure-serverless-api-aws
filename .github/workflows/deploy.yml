@@ -49,7 +49,7 @@ env:
 jobs:
   plan:
     name: Terraform plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       id-token: write # required to request the OIDC token
       contents: read
@@ -106,7 +106,7 @@ jobs:
   apply:
     name: Terraform apply
     needs: plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Requires manual approval: the production environment has bdahiya2007 as required
     # reviewer (environment protection is configured via the GitHub API, not in this file).
     # The run pauses here until approved from the Actions tab, after you have read the plan.

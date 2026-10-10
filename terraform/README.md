@@ -285,6 +285,11 @@ sed "s/ACCOUNT_ID/$(aws sts get-caller-identity --query Account --output text)/"
 - **First CI runs may report `AccessDenied`.** The deploy role's policy is resource-scoped and was written
   without being able to test it from CI. Add the missing action in `terraform/bootstrap/main.tf` and apply it manually.
 - Actions are **pinned by commit SHA** (the repo requires it). Update the SHA and the version comment together.
+- **Runners are pinned to `ubuntu-24.04`, not `ubuntu-latest`.** `ubuntu-latest` is moving to Ubuntu 26.04 from October 19,
+  2026, which would change the machine that runs CI and the approval-gated deploy with no change in this repository. Pinning
+  keeps builds reproducible. To upgrade, change `runs-on` in `validate.yml` and `deploy.yml` to `ubuntu-26.04` after testing
+  it (the validate workflow can be run on a throwaway branch); GitHub keeps older images available for a long period, so
+  there is no rush, but remember to move before the pinned image is retired.
 
 ### One-time setup, in order
 
