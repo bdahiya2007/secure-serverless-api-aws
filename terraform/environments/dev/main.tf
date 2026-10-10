@@ -47,6 +47,34 @@ module "save_order_function" {
   ]
 }
 
+# Lambda-based alternative to the direct DynamoDB read, so both styles exist for the same operation and can be
+# compared. Named with the save-order- prefix so the pipeline's IAM scope (save-order-*) covers its role and function.
+module "get_order_function" {
+  source = "../../modules/lambda-function"
+
+  function_name = "save-order-lookup"
+  description   = "Reads an order's items from DynamoDB (Lambda alternative to the direct integration)"
+  source_dir    = "${path.root}/../../../src/get-order"
+  handler       = "index.handler"
+  memory_size   = 512 # same as save-order, so the comparison with the direct read is fair
+
+  environment_variables = {
+    TABLE_NAME = module.orders_table.table_name
+  }
+
+  # Least privilege: Query on one table. No write, no scan.
+  policy_statements = [
+    {
+      sid       = "QueryOrderItems"
+      actions   = ["dynamodb:Query"]
+      resources = [module.orders_table.table_arn]
+    }
+  ]
+
+  enable_xray_tracing  = true
+  permissions_boundary = local.app_role_boundary_arn
+}
+
 module "orders_user_pool" {
   source = "../../modules/cognito-user-pool"
 
@@ -86,6 +114,17 @@ module "orders_api" {
       lambda_invoke_arn    = module.save_order_function.invoke_arn
       authorization_type   = "COGNITO_USER_POOLS"
       request_schema       = file("${path.module}/models/create-order.json")
+    }
+
+    # Same read as GET /orders/{orderId}, done by a Lambda, for comparison. Its own top-level path avoids
+    # shadowing the direct route's {orderId}.
+    GetOrderViaLambda = {
+      path_part            = "orders-via-lambda"
+      child_path_part      = "{orderId}"
+      http_method          = "GET"
+      lambda_function_name = module.get_order_function.function_name
+      lambda_invoke_arn    = module.get_order_function.invoke_arn
+      authorization_type   = "COGNITO_USER_POOLS"
     }
   }
 

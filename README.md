@@ -9,7 +9,8 @@ observable, and deployed through a pipeline that holds no AWS keys. Everything i
 An authenticated client sends `POST /orders`. API Gateway checks the Cognito token and the request shape, a
 Node.js Lambda validates it again and writes one item to DynamoDB, and the result is traced and charted. Reading an
 order back (`GET /orders/{orderId}`) skips Lambda entirely: API Gateway calls DynamoDB itself through a direct service
-integration with request and response mapping templates.
+integration with request and response mapping templates. The same read also exists as a Lambda
+(`GET /orders-via-lambda/{orderId}`), so both styles can be compared like for like.
 
 ## Architecture
 
@@ -22,6 +23,8 @@ flowchart LR
   APIGW --> L["Lambda: save-order<br/>Node.js 24, arm64"]
   L --> D[("DynamoDB: Orders<br/>on-demand")]
   APIGW -->|"GET /orders/{orderId}<br/>direct integration, no Lambda"| D
+  APIGW -.->|"GET /orders-via-lambda/{orderId}<br/>same read, for comparison"| L2["Lambda: save-order-lookup<br/>Node.js 24, arm64"]
+  L2 --> D
   L -.-> X["X-Ray traces"]
   APIGW -.-> CW["CloudWatch dashboard"]
   L -.-> CW
@@ -86,10 +89,12 @@ terraform/
 ├── modules/              # dynamodb-table, lambda-function, rest-api, cognito-user-pool,
 │                         # apigw-dynamodb-role, waf-rate-limit, cloudwatch-dashboard
 └── README.md             # full technical reference and runbook
-src/save-order/           # Lambda source and unit tests
+src/save-order/           # write Lambda: source and unit tests
+src/get-order/            # read Lambda (Lambda alternative to the direct read): source and unit tests
 scripts/e2e-test.sh       # end-to-end smoke test with automatic cleanup
 scripts/secret-scan.py    # secret and sensitive-data scanner (pre-commit hook and CI)
 scripts/benchmark/        # cold-start and memory benchmark (temporary function, cleans up)
+scripts/compare-reads.sh  # interleaved latency comparison: direct read vs Lambda read (cleans up)
 .github/workflows/        # validate.yml and deploy.yml
 docs/                     # TESTING.md, SECRET_SCANNING.md, OPTIMIZATION_GUIDE.md and the IAM policy for the engineer's SSO permission set
 ```
@@ -112,7 +117,7 @@ curl -X POST "$API_URL/orders" \
 | `401` | Missing or invalid token |
 | `409` | That order item already exists |
 
-Reading an order back needs the same token:
+Reading an order back needs the same token, and there are two ways to do it, so they can be compared:
 
 ```bash
 curl "$API_URL/orders/o-1001" -H "Authorization: $ID_TOKEN"
@@ -124,12 +129,16 @@ curl "$API_URL/orders/o-1001" -H "Authorization: $ID_TOKEN"
 | `404` | No such order |
 | `401` | Missing or invalid token |
 
+The Lambda version, `GET /orders-via-lambda/{orderId}`, returns the same data with three differences: compact JSON, a
+`"truncated"` flag that tells the client when the 100-item cap cut the list off (the direct read cannot), and **`400`** for an
+invalid id (a Lambda can validate ids with an allow-list, while the direct read treats any id as a lookup and returns 404).
+
 The full [testing guide](docs/TESTING.md) covers unit tests, an end-to-end script that cleans up after itself,
-observability checks and the pipeline. The Lambda logic has 15 unit tests using Node's built-in runner and no
+observability checks and the pipeline. The two Lambdas have 23 unit tests using Node's built-in runner and no
 dependencies:
 
 ```bash
-node --test "src/save-order/*.test.mjs"
+node --test "src/*/*.test.mjs"
 ```
 
 ## Performance
@@ -234,6 +243,9 @@ It needs an AWS session and room for 5 parallel invocations (the account default
 
 - **REST API, not HTTP API.** The requirement named a REST API, which also provides request validation and
   usage controls. An HTTP API is cheaper and would suit a simpler need.
+- **Both read styles are built.** `GET /orders/{orderId}` is the direct integration and
+  `GET /orders-via-lambda/{orderId}` is the same read in a Lambda, so the choice can be made on measurements.
+  `scripts/compare-reads.sh` runs the like-for-like comparison.
 - **Lambda proxy integration for writes, direct DynamoDB integration for reads.** Writes use a Lambda so the contract
   and validation live in code that can be unit-tested. Reads need no logic beyond mapping, so API Gateway calls
   DynamoDB itself: no Lambda to run, patch or pay for, and no Lambda cold start. It was **not measurably faster** (see

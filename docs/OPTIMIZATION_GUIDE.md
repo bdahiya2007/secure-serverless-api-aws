@@ -14,7 +14,7 @@ and security. Everything here was measured on this project unless it says "not m
 | Is initialization in the right place? | Yes: the client and config are created once per environment, outside the handler. |
 | What was actually slow? | A **cold request: about 1.28 s** at 128 MB (init 308 ms plus a 983 ms first request). Warm: about 70 ms. |
 | What fixed it? | **Memory (CPU)**: 512 MB gives about 0.51 s cold and 11 ms warm. Code-level tuning did nothing measurable. |
-| Is the direct DynamoDB read faster? | **Not in our measurement.** It removes the Lambda (a cold-start source and a cost), but it was about as fast as the Lambda path, not faster. |
+| Is the direct DynamoDB read faster? | **Not in our first measurement** (against a Lambda *write*). The same read now also exists as a Lambda (`GET /orders-via-lambda/{orderId}`), so a like-for-like comparison is possible with `./scripts/compare-reads.sh`; see section 3.3. |
 | Where does the money go? | **API Gateway: about $3.50 per million requests**, about 80 to 96% of the cost of any request. Lambda tuning saves cents. |
 
 ## 1. Cold and warm requests
@@ -38,7 +38,7 @@ Environments are reused for minutes, then retired.
 | **Init warm-up and client timeouts** | Moves credential/region resolution into the boosted-CPU init phase; fails fast on hangs | Slow first-request work that can move earlier, or hangs are costly | The gain is inside the noise | No gain; rejected |
 | **Bundle and minify** (esbuild) | One small file, pinned SDK, often faster cold start | You need a pinned SDK or have many dependencies | You want no build tooling | **Not measured**; runtime SDK chosen on purpose |
 | **Provisioned concurrency** | No cold starts: environments stay initialized | A strict latency target with steady traffic | Cost matters (it bills continuously, even when idle) | **Not used or measured** |
-| **Direct service integration** | One fewer service in the path; no function to run or pay for | The request is pure data mapping (key lookup, simple query) | You need validation, rules, branching or complex logic | Used for the read path |
+| **Direct service integration** | One fewer service in the path; no function to run or pay for | The request is pure data mapping (key lookup, simple query) | You need validation, rules, branching or complex logic | Used for one read path; the same read also exists as a Lambda for comparison |
 
 ## 3. Measurements
 
@@ -75,12 +75,32 @@ connection per request**, timing the total request. The function was warm.
   did not buy lower latency here**. An earlier version of the README claimed "lower latency"; that claim was unmeasured and
   has been corrected.
 - **The real advantages of the direct read** are no Lambda cold start, no function to run, patch or pay for, and fewer moving parts.
-- Not measured: a Lambda-based read of the same data, a client in the same region, and cold-start behaviour of the direct read
-  (it has none of Lambda's, but API Gateway itself can add a small first-request cost).
+- The comparison above is against a Lambda *write*, which does different work. For a fair answer, see section 3.3.
+- Not measured: a client in the same region, and cold-start behaviour of the direct read (it has none of Lambda's, but API
+  Gateway itself can add a small first-request cost).
 
 **Caveats:** one client, 30 samples, one day, a new connection per request, internet path. Differences of a few percent are noise.
 
-To repeat it, sign in as in [TESTING.md](TESTING.md) and time requests with `curl -w '%{time_total}\n'`.
+### 3.3 Direct read against Lambda read (like for like)
+
+The same read now exists both ways, so the question "is removing the Lambda worth it?" can be answered on equal terms:
+
+| | `GET /orders/{orderId}` | `GET /orders-via-lambda/{orderId}` |
+|---|---|---|
+| Path | API Gateway to DynamoDB | API Gateway to Lambda `save-order-lookup` (512 MB, arm64) to DynamoDB |
+| DynamoDB call | `Query`, strongly consistent, up to 100 items | The same |
+| Authorizer, throttle, order read | The same | The same |
+| Extra behaviour | None | Id allow-list (400), a `truncated` flag, logs and X-Ray traces, unit tests |
+
+Method: `./scripts/compare-reads.sh` seeds one order with three items and measures both paths and an unauthenticated
+gateway-only request **interleaved** (so network drift affects each equally), after discarding warm-up requests. It removes its
+temporary data afterwards. The first Lambda request after a deploy is a cold start and is deliberately excluded from the warm
+numbers; its cost is the cold-start figure in section 3.1.
+
+**Results:** the first run happens after this route is deployed, and the numbers are added here and to the README then.
+Until then, treat the earlier comparison against a Lambda write as indicative only.
+
+To repeat the earlier single-path measurement, sign in as in [TESTING.md](TESTING.md) and time requests with `curl -w '%{time_total}\n'`.
 
 ## 4. Cost
 
@@ -96,7 +116,7 @@ accounts only, so it does not apply here); DynamoDB on-demand **$0.625 per milli
 |---|---|---|---|---|
 | Write via Lambda, warm, 512 MB (about 11 ms billed) | $3.50 | $0.625 | $0.27 | **$4.40** |
 | Read, direct integration (strongly consistent, small order) | $3.50 | $0.125 | none | **$3.63** |
-| The same read via a Lambda (hypothetical) | $3.50 | $0.125 | $0.27 | $3.90 |
+| The same read via a Lambda (built as `/orders-via-lambda`; cost computed, not billed) | $3.50 | $0.125 | $0.27 | $3.90 |
 | Read, direct, eventually consistent (hypothetical) | $3.50 | $0.0625 | none | $3.56 |
 
 - **The direct read saves about $0.27 per million (about 7%)**. Strong consistency costs about $0.06 per million extra.
@@ -170,5 +190,6 @@ allowance is reached first.
 
 ## 8. Not evaluated
 
-esbuild bundling, provisioned concurrency, an HTTP API instead of a REST API (a different feature set and price), an
-eventually consistent read, and a Lambda-based read of the same data for a like-for-like latency comparison.
+esbuild bundling, provisioned concurrency, an HTTP API instead of a REST API (a different feature set and price), and an
+eventually consistent read. (A Lambda-based read of the same data now exists for the like-for-like latency comparison; see
+section 3.3.)

@@ -235,16 +235,26 @@ data "aws_iam_policy_document" "deploy" {
     resources = [local.table_arn, "${local.table_arn}/*"]
   }
 
+  # The function and any sibling named <function>-* (for example save-order-lookup), matching the
+  # save-order-* scope already used for application roles.
   statement {
-    sid       = "SaveOrderFunction"
-    actions   = ["lambda:*"]
-    resources = [local.function_arn, "${local.function_arn}:*"]
+    sid     = "SaveOrderFunctions"
+    actions = ["lambda:*"]
+    resources = [
+      local.function_arn,
+      "${local.function_arn}:*",
+      "${local.function_arn}-*",
+    ]
   }
 
   statement {
-    sid       = "FunctionLogGroup"
-    actions   = ["logs:*"]
-    resources = [local.log_group, "${local.log_group}:*"]
+    sid     = "FunctionLogGroups"
+    actions = ["logs:*"]
+    resources = [
+      local.log_group,
+      "${local.log_group}:*",
+      "${local.log_group}-*",
+    ]
   }
 
   statement {
