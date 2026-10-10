@@ -57,6 +57,7 @@ flowchart LR
 | **State** | Private, versioned, encrypted S3 bucket with TLS-only access and native locking. State and variable files are never committed. |
 | **Account hardening** | S3 Block Public Access on for the whole account, deletion protection on the table and user pool. |
 | **Repository** | Branch protection (admins included), required pull requests, secret scanning with push protection, GitHub Actions pinned by commit SHA. |
+| **Leak prevention** | A pre-commit hook and a CI job scan for credentials, AWS account and resource IDs, personal data and state or key files, and redact what they report ([details](docs/SECRET_SCANNING.md)). |
 | **Error and log hygiene** | 500 responses are generic, and logs record the error type and request ID, never order contents. |
 
 ## Cost awareness
@@ -82,9 +83,10 @@ terraform/
 └── README.md             # full technical reference and runbook
 src/save-order/           # Lambda source and unit tests
 scripts/e2e-test.sh       # end-to-end smoke test with automatic cleanup
+scripts/secret-scan.py    # secret and sensitive-data scanner (pre-commit hook and CI)
 scripts/benchmark/        # cold-start and memory benchmark (temporary function, cleans up)
 .github/workflows/        # validate.yml and deploy.yml
-docs/                     # TESTING.md and the IAM policy for the engineer's SSO permission set
+docs/                     # TESTING.md, SECRET_SCANNING.md and the IAM policy for the engineer's SSO permission set
 ```
 
 ## Try it

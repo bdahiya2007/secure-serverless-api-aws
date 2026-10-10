@@ -23,8 +23,10 @@ terraform/
 src/save-order/                    # Node.js Lambda code and unit tests
 .github/workflows/                 # validate.yml (PRs, no AWS) and deploy.yml (push to main, OIDC + approval)
 scripts/e2e-test.sh                # end-to-end smoke test with automatic cleanup
+scripts/secret-scan.py             # secret / sensitive-data scanner (pre-commit hook and CI)
 scripts/benchmark/                 # cold-start and memory benchmark (temporary function, cleans up)
 docs/TESTING.md                    # how to test: unit, end-to-end, observability, pipeline, WAF
+docs/SECRET_SCANNING.md            # what is scanned for, how to enable the hook, limits
 docs/permission-set-inline-policy.json   # extra IAM your SSO permission set needs
 ```
 
