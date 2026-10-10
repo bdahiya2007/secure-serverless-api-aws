@@ -91,7 +91,7 @@ scripts/e2e-test.sh       # end-to-end smoke test with automatic cleanup
 scripts/secret-scan.py    # secret and sensitive-data scanner (pre-commit hook and CI)
 scripts/benchmark/        # cold-start and memory benchmark (temporary function, cleans up)
 .github/workflows/        # validate.yml and deploy.yml
-docs/                     # TESTING.md, SECRET_SCANNING.md and the IAM policy for the engineer's SSO permission set
+docs/                     # TESTING.md, SECRET_SCANNING.md, OPTIMIZATION_GUIDE.md and the IAM policy for the engineer's SSO permission set
 ```
 
 ## Try it
@@ -187,6 +187,35 @@ line (`Init Duration` and `Duration`), and a sample counts as cold only if it ha
 
 **Decision:** memory raised from 128 MB to **512 MB**; code unchanged.
 
+### Request latency
+
+Measured end to end from one client (30 requests per path, a new TCP and TLS connection each time, warm function):
+
+| Path | Median | p90 |
+|---|---|---|
+| API Gateway only (unauthenticated `GET`, rejected with 401, no backend) | 274 ms | 285 ms |
+| `GET /orders/{id}`, direct DynamoDB integration (no Lambda) | 353 ms | 374 ms |
+| `POST /orders`, Lambda (512 MB) plus DynamoDB write | 327 ms | 339 ms |
+
+The network round trip dominates (the 401 row is already 274 ms). The direct read was **not faster** than the Lambda path: it
+adds about 79 ms over the gateway floor against about 53 ms for the Lambda write, though the two do different work (a
+strongly consistent `Query` against a `PutItem`), so this is not a like-for-like comparison. Its benefit is no Lambda to run or
+pay for and no Lambda cold start, not speed.
+
+### Cost and security trade-offs
+
+- **Cost:** API Gateway at about **$3.50 per million requests** is 80 to 96% of any request's cost, so Lambda tuning moves
+  cents. Per million requests: a Lambda write about $4.40, a direct read about $3.63 (a Lambda read would be about
+  $3.90). 512 MB makes warm requests cheaper but cold ones about 59% dearer in compute. Provisioned concurrency, which
+  removes cold starts, would cost about $5.40 per month for one 512 MB environment, even when idle. The API Gateway free
+  tier does not apply to this account.
+- **Security:** the main risks are request data leaking through module-level state (kept out by design), template
+  injection in the direct read (mitigated and tested), and the missing ownership model (any signed-in user can read any
+  order). Reads also have weaker visibility: no Lambda logs, X-Ray traces or API access logs.
+
+The full treatment, with the decision table for every technique, the cost arithmetic and a security-risk table, is in the
+[optimization guide](docs/OPTIMIZATION_GUIDE.md).
+
 **Limits of this measurement:** about 10 cold samples per configuration, one account and region, run on one day, and
 X-Ray tracing included in the timings. Treat differences of a few percent as noise.
 
@@ -207,9 +236,10 @@ It needs an AWS session and room for 5 parallel invocations (the account default
   usage controls. An HTTP API is cheaper and would suit a simpler need.
 - **Lambda proxy integration for writes, direct DynamoDB integration for reads.** Writes use a Lambda so the contract
   and validation live in code that can be unit-tested. Reads need no logic beyond mapping, so API Gateway calls
-  DynamoDB itself: lower latency and no Lambda to run or pay for. The trade-off is that VTL templates have no unit
-  tests (they are verified end to end), reads are limited to 100 items per order, and the response shape is coupled
-  to DynamoDB's typed JSON through the template.
+  DynamoDB itself: no Lambda to run, patch or pay for, and no Lambda cold start. It was **not measurably faster** (see
+  [Request latency](#request-latency)). The trade-offs are that VTL templates have no unit tests (they are verified end
+  to end), reads are limited to 100 items per order and silently truncated beyond that, reads leave no Lambda logs or
+  X-Ray traces, and the response shape is coupled to DynamoDB's typed JSON through the template.
 - **Node.js 24, not 26.** Node.js 26 is still a Lambda public preview, so the latest generally available runtime
   was used.
 - **512 MB of memory, from a benchmark.** More memory means more CPU, which cut cold starts by 60% and warm requests

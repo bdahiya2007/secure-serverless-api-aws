@@ -27,6 +27,7 @@ scripts/e2e-test.sh                # end-to-end smoke test with automatic cleanu
 scripts/secret-scan.py             # secret / sensitive-data scanner (pre-commit hook and CI)
 scripts/benchmark/                 # cold-start and memory benchmark (temporary function, cleans up)
 docs/TESTING.md                    # how to test: unit, end-to-end, observability, pipeline, WAF
+docs/OPTIMIZATION_GUIDE.md         # when and why to use each optimization, with measurements, cost and security risks
 docs/SECRET_SCANNING.md            # what is scanned for, how to enable the hook, limits
 docs/permission-set-inline-policy.json   # extra IAM your SSO permission set needs
 ```
@@ -117,9 +118,19 @@ Response: `{ "orderId", "itemCount", "items": [ { "itemId", "quantity", "price",
 **Known gap:** orders have no owner, so **any signed-in user can read any order** if they know its ID. Per-user ownership is
 not implemented (see the root README).
 
-**Limits:** no pagination (one `Query`, up to 100 items), no list-all (a `Scan` would be unbounded and expose every order),
-and the VTL templates have no unit tests. They were checked against a real DynamoDB table on a scratch API, and
-`scripts/e2e-test.sh` covers the read cases against the deployed stack.
+**Limitations and trade-offs:** no pagination (one `Query`, up to 100 items), no list-all (a `Scan` would be unbounded and expose
+every order). Beyond that:
+- **Silent truncation:** results are cut at 100 items and `itemCount` is the number returned, so a client cannot tell the list
+  was cut off (DynamoDB's continuation marker is dropped).
+- **Less visibility:** no Lambda logs, no X-Ray trace and no API access logs for reads; only API Gateway's `Count` and `4XXError`
+  metrics show them. Errors are deliberately generic, which protects against information leaks but makes failures harder to diagnose.
+- **Not faster:** measured about as fast as the Lambda path (median 353 ms against 327 ms for the Lambda write, mostly network),
+  so the benefit is no Lambda to run or pay for, not latency.
+- **Cost:** the strongly consistent read uses twice the read units of an eventually consistent one (about $0.06 more per million
+  reads); API Gateway at $3.50 per million dominates.
+The VTL templates have no unit tests. They were checked against a real DynamoDB table on a scratch API, and
+`scripts/e2e-test.sh` covers the read cases against the deployed stack. See the
+[optimization guide](../docs/OPTIMIZATION_GUIDE.md) for the measurements, the cost arithmetic and the security-risk table.
 
 **Before merging a change like this, update IAM (one-time, manual).** API Gateway checks `iam:PassRole` when a method is
 given an integration role, and by default your SSO permission set and the CI deploy role may only pass roles to Lambda.
