@@ -24,7 +24,7 @@ env:
 jobs:
   validate:
     name: Validate Terraform and Lambda tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
 
@@ -75,7 +75,7 @@ jobs:
   # list; it is empty on fork PRs, where only the built-in rules run.
   secret-scan:
     name: Scan for secrets and sensitive data
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
 
