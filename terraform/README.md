@@ -118,7 +118,7 @@ Response: `{ "orderId", "itemCount", "items": [ { "itemId", "quantity", "price",
 **Known gap:** orders have no owner, so **any signed-in user can read any order** if they know its ID. Per-user ownership is
 not implemented (see the root README).
 
-**Limits and drawbacks:** no pagination (one `Query`, up to 100 items), no list-all (a `Scan` would be unbounded and expose
+**Limitations and trade-offs:** no pagination (one `Query`, up to 100 items), no list-all (a `Scan` would be unbounded and expose
 every order). Beyond that:
 - **Silent truncation:** results are cut at 100 items and `itemCount` is the number returned, so a client cannot tell the list
   was cut off (DynamoDB's continuation marker is dropped).

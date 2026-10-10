@@ -148,7 +148,7 @@ allowance is reached first.
 | **Generic errors** | DynamoDB error details are replaced by fixed 400 and 500 bodies | Good for information leakage, but harder to debug |
 | **Wider IAM for the pipeline** | Permission set and deploy role can now pass `save-order-*` roles to API Gateway as well as Lambda | Still limited to that name prefix and capped by the boundary |
 
-## 6. Other drawbacks of the direct read
+## 6. Trade-offs and limitations of the direct read
 
 - **Silent truncation.** One `Query` returns at most 100 items. The response's `itemCount` is the number returned, and
   DynamoDB's continuation marker is dropped, so a client cannot tell whether the list was cut off. A small change to the
