@@ -7,7 +7,9 @@ observable, and deployed through a pipeline that holds no AWS keys. Everything i
 [![Deploy](https://github.com/bdahiya2007/secure-serverless-api-aws/actions/workflows/deploy.yml/badge.svg)](https://github.com/bdahiya2007/secure-serverless-api-aws/actions/workflows/deploy.yml)
 
 An authenticated client sends `POST /orders`. API Gateway checks the Cognito token and the request shape, a
-Node.js Lambda validates it again and writes one item to DynamoDB, and the result is traced and charted.
+Node.js Lambda validates it again and writes one item to DynamoDB, and the result is traced and charted. Reading an
+order back (`GET /orders/{orderId}`) skips Lambda entirely: API Gateway calls DynamoDB itself through a direct service
+integration with request and response mapping templates.
 
 ## Architecture
 
@@ -19,6 +21,7 @@ flowchart LR
   C --> APIGW["API Gateway REST API<br/>Cognito authorizer<br/>schema validation<br/>throttling"]
   APIGW --> L["Lambda: save-order<br/>Node.js 24, arm64"]
   L --> D[("DynamoDB: Orders<br/>on-demand")]
+  APIGW -->|"GET /orders/{orderId}<br/>direct integration, no Lambda"| D
   L -.-> X["X-Ray traces"]
   APIGW -.-> CW["CloudWatch dashboard"]
   L -.-> CW
@@ -37,7 +40,8 @@ flowchart LR
 
 ## What this demonstrates
 
-- **Infrastructure as code, modular:** six reusable Terraform modules with validated inputs and plan-time guardrails.
+- **Infrastructure as code, modular:** seven reusable Terraform modules with validated inputs and plan-time guardrails.
+- **Direct service integration:** API Gateway reads DynamoDB with no Lambda, using VTL mapping templates and a read-only role.
 - **Security by default:** least-privilege IAM, a permissions boundary, no stored credentials, defense in depth on input.
 - **Cost awareness:** idle cost is about $0, and every billed feature is off until deliberately enabled.
 - **Delivery discipline:** PR validation without AWS access, OIDC to AWS, manual approval, remote locked state.
@@ -50,6 +54,7 @@ flowchart LR
 | **Authentication** | Cognito user pool (Lite tier), admin-created users only, strong password policy, optional TOTP MFA. API Gateway rejects requests without a valid ID token before the Lambda runs. |
 | **Input handling** | The API validates the body against a JSON Schema, and the Lambda validates again with an allow-list of fields. Malformed JSON and unknown fields get a 400 that never echoes the input. |
 | **No overwrites** | Writes use a condition expression, so an existing `orderId` + `itemId` returns 409 instead of being replaced. |
+| **Direct DynamoDB reads** | API Gateway assumes a role that can only `Query` the one Orders table, and the module rejects any write action or wildcard. The request template passes the path parameter as a string value (never as part of the query) and escapes it, and unmatched content types are rejected. DynamoDB errors are replaced with fixed 400 and 500 bodies, so internal details never reach the client. |
 | **Least-privilege IAM** | The Lambda role can `PutItem` on one table ARN and write to its own log group. The module rejects `*` actions and resources at plan time, with one documented exception (X-Ray write actions cannot be scoped). |
 | **Permissions boundary** | Every role the pipeline creates must carry a boundary that caps it at logging, X-Ray writes and Orders table data access. |
 | **Pipeline identity** | GitHub OIDC with short-lived tokens, no stored keys. The trust policy pins the repository by immutable ID and allows only `main` (plan) and the `production` environment (apply). Pull requests cannot assume it. |
@@ -79,7 +84,7 @@ terraform/
 ├── bootstrap/            # applied manually: state bucket, permissions boundary, CI deploy role
 ├── environments/dev/     # root configuration for the dev environment
 ├── modules/              # dynamodb-table, lambda-function, rest-api, cognito-user-pool,
-│                         # waf-rate-limit, cloudwatch-dashboard
+│                         # apigw-dynamodb-role, waf-rate-limit, cloudwatch-dashboard
 └── README.md             # full technical reference and runbook
 src/save-order/           # Lambda source and unit tests
 scripts/e2e-test.sh       # end-to-end smoke test with automatic cleanup
@@ -106,6 +111,18 @@ curl -X POST "$API_URL/orders" \
 | `400` | Rejected by API Gateway or the Lambda: invalid body |
 | `401` | Missing or invalid token |
 | `409` | That order item already exists |
+
+Reading an order back needs the same token:
+
+```bash
+curl "$API_URL/orders/o-1001" -H "Authorization: $ID_TOKEN"
+```
+
+| Response | Meaning |
+|---|---|
+| `200` | `{ "orderId", "itemCount", "items": [ { "itemId", "quantity", "price", "createdAt" } ] }` (missing optional fields are `null`) |
+| `404` | No such order |
+| `401` | Missing or invalid token |
 
 The full [testing guide](docs/TESTING.md) covers unit tests, an end-to-end script that cleans up after itself,
 observability checks and the pipeline. The Lambda logic has 15 unit tests using Node's built-in runner and no
@@ -188,8 +205,11 @@ It needs an AWS session and room for 5 parallel invocations (the account default
 
 - **REST API, not HTTP API.** The requirement named a REST API, which also provides request validation and
   usage controls. An HTTP API is cheaper and would suit a simpler need.
-- **Lambda proxy integration** instead of VTL mapping templates, so the function owns the contract and can be
-  tested without API Gateway.
+- **Lambda proxy integration for writes, direct DynamoDB integration for reads.** Writes use a Lambda so the contract
+  and validation live in code that can be unit-tested. Reads need no logic beyond mapping, so API Gateway calls
+  DynamoDB itself: lower latency and no Lambda to run or pay for. The trade-off is that VTL templates have no unit
+  tests (they are verified end to end), reads are limited to 100 items per order, and the response shape is coupled
+  to DynamoDB's typed JSON through the template.
 - **Node.js 24, not 26.** Node.js 26 is still a Lambda public preview, so the latest generally available runtime
   was used.
 - **512 MB of memory, from a benchmark.** More memory means more CPU, which cut cold starts by 60% and warm requests
@@ -202,7 +222,8 @@ It needs an AWS session and room for 5 parallel invocations (the account default
 
 ## Not implemented
 
-Read, list, update and delete endpoints, and per-user ownership of orders. Multiple environments, multi-region
+List, update and delete endpoints, and **per-user ownership of orders**: today any signed-in user can read any
+order by its ID, because orders do not record an owner. Reading is limited to one order at a time. Multiple environments, multi-region
 disaster recovery, API access logs and CloudWatch alarms. Hosted sign-in with PKCE for browser clients, and
 the X-Ray SDK for DynamoDB sub-segments. The first two items are the most natural next steps.
 

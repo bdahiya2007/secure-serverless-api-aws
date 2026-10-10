@@ -58,6 +58,17 @@ module "orders_user_pool" {
   deletion_protection_enabled  = true
 }
 
+# Role API Gateway assumes to read the Orders table directly. Read-only and scoped to this one table; it
+# carries the pipeline's permissions boundary (the name matches the save-order-* pattern the pipeline may manage).
+module "orders_read_role" {
+  source = "../../modules/apigw-dynamodb-role"
+
+  name                 = "save-order-api-read-role"
+  table_arn            = module.orders_table.table_arn
+  actions              = ["dynamodb:Query"]
+  permissions_boundary = local.app_role_boundary_arn
+}
+
 module "orders_api" {
   source = "../../modules/rest-api"
 
@@ -75,6 +86,21 @@ module "orders_api" {
       lambda_invoke_arn    = module.save_order_function.invoke_arn
       authorization_type   = "COGNITO_USER_POOLS"
       request_schema       = file("${path.module}/models/create-order.json")
+    }
+  }
+
+  # Reads skip Lambda: API Gateway calls DynamoDB itself and maps request and response with VTL templates.
+  dynamodb_routes = {
+    GetOrder = {
+      parent_path_part     = "orders"
+      path_part            = "{orderId}"
+      http_method          = "GET"
+      authorization_type   = "COGNITO_USER_POOLS"
+      action               = "Query"
+      credentials_role_arn = module.orders_read_role.role_arn
+      path_parameters      = ["orderId"]
+      request_template     = replace(file("${path.module}/templates/get-order.request.vtl"), "__TABLE_NAME__", module.orders_table.table_name)
+      response_template    = file("${path.module}/templates/get-order.response.vtl")
     }
   }
 }

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # End-to-end smoke test for the deployed orders API.
 #
-# Creates a temporary Cognito user and a few order rows, calls POST /orders for the success and
-# failure cases, then ALWAYS removes the user and the rows (even if a check fails or you press Ctrl+C).
+# Creates a temporary Cognito user and a few order rows, calls POST /orders and GET /orders/{orderId}
+# (the direct DynamoDB integration) for the success and failure cases, then ALWAYS removes the user and the rows (even if a check fails or you press Ctrl+C).
 # Needs: AWS credentials (aws sso login), terraform, curl, openssl, python3.
 # Cost: a handful of API requests; everything stays inside the free tiers.
 set -euo pipefail
@@ -57,6 +57,21 @@ expect() {
   fi
 }
 
+# expect_get <description> <expected HTTP status> <token or "-"> <order id, URL-encoded> [text the body must contain]
+expect_get() {
+  local desc=$1 want=$2 token=$3 id=$4 needle=${5:-} out got body
+  local -a auth=()
+  [ "$token" != "-" ] && auth=(-H "Authorization: $token")
+  out=$(curl -sS -w '\n%{http_code}' -m 20 "${auth[@]}" "${URL}/${id}")
+  got=${out##*$'\n'}
+  body=${out%$'\n'*}
+  if [ "$got" = "$want" ] && { [ -z "$needle" ] || grep -qF -- "$needle" <<<"$body"; }; then
+    printf '  PASS  %-52s HTTP %s\n' "$desc" "$got"; PASS=$((PASS + 1))
+  else
+    printf '  FAIL  %-52s expected %s%s, got %s\n' "$desc" "$want" "${needle:+ containing $needle}" "$got"; FAIL=$((FAIL + 1))
+  fi
+}
+
 echo "Calling ${URL}"
 VALID="{\"orderId\":\"${ORDER}\",\"itemId\":\"i-1\",\"quantity\":2,\"price\":9.99}"
 expect "valid order is saved"                         201 "$ID_TOKEN"     "$VALID"
@@ -65,6 +80,13 @@ expect "no token"                                     401 "-"             "$VALI
 expect "access token instead of ID token"             401 "$ACCESS_TOKEN" "$VALID"
 expect "missing orderId and an extra field"           400 "$ID_TOKEN"     '{"itemId":"i-1","extra":1}'
 expect "malformed JSON"                               400 "$ID_TOKEN"     '{not json'
+
+# Reads go straight from API Gateway to DynamoDB (no Lambda).
+expect_get "read the order back (200, item present)"      200 "$ID_TOKEN" "$ORDER" '"itemId": "i-1"'
+expect_get "read keeps numbers as numbers"                200 "$ID_TOKEN" "$ORDER" '"quantity": 2'
+expect_get "unknown order"                                404 "$ID_TOKEN" "no-such-${RUN}"
+expect_get "id with a quote is handled safely"            404 "$ID_TOKEN" 'a%22b'
+expect_get "read without a token"                         401 "-"         "$ORDER"
 
 echo
 echo "Result: ${PASS} passed, ${FAIL} failed"

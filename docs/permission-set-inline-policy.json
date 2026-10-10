@@ -24,12 +24,17 @@
       "Resource": "arn:aws:iam::ACCOUNT_ID:role/save-order-*"
     },
     {
-      "Sid": "PassAppRolesToLambdaOnly",
+      "Sid": "PassAppRolesToLambdaAndApiGateway",
       "Effect": "Allow",
       "Action": "iam:PassRole",
       "Resource": "arn:aws:iam::ACCOUNT_ID:role/save-order-*",
       "Condition": {
-        "StringEquals": { "iam:PassedToService": "lambda.amazonaws.com" }
+        "StringEquals": {
+          "iam:PassedToService": [
+            "lambda.amazonaws.com",
+            "apigateway.amazonaws.com"
+          ]
+        }
       }
     },
     {

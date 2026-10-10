@@ -319,15 +319,16 @@ data "aws_iam_policy_document" "deploy" {
     resources = [local.app_role_arn_glob]
   }
 
+  # API Gateway checks iam:PassRole when a method is given an integration role (direct DynamoDB integration).
   statement {
-    sid       = "PassAppRolesToLambda"
+    sid       = "PassAppRolesToLambdaAndApiGateway"
     actions   = ["iam:PassRole"]
     resources = [local.app_role_arn_glob]
 
     condition {
       test     = "StringEquals"
       variable = "iam:PassedToService"
-      values   = ["lambda.amazonaws.com"]
+      values   = ["lambda.amazonaws.com", "apigateway.amazonaws.com"]
     }
   }
 
