@@ -11,6 +11,10 @@ How to test the orders API, from fastest to most complete. Commands run from the
 | [4. Observability](#4-check-observability) | Yes | minutes | Metrics, logs and traces are being produced |
 | [5. Pipeline](#5-test-the-pipeline) | GitHub | minutes | CI validation and the approval-gated deploy |
 | [6. WAF](#6-waf-rate-limit-optional-billed) | Yes | minutes | Per-IP rate limiting (**billed**) |
+| [7. Multi-region](#7-multi-region-activeactive-optional-billed) | Yes | 30 minutes | Replication, conflicts, failover across two regions (**billed**) |
+| [8. Google sign-in](#8-sign-in-with-google-optional) | Yes | 20 minutes | Federated sign-in, the allow-list guard, lockout; two regions with [COGNITO_TESTING_RUNBOOK.md](COGNITO_TESTING_RUNBOOK.md) (free) |
+
+The optional DAX and API cache checks are subsections of level 3.
 
 **Prerequisites:** an AWS session (`aws sso login`), `terraform`, `curl`, `openssl`, `python3`, and Node.js 22 or newer
 for the unit tests. The API must already be deployed (see [terraform/README.md](../terraform/README.md)).

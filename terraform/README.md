@@ -360,7 +360,7 @@ The hosted zone is already paid for by the existing site.
 - **Measured replication lag** was 0.3 to 1.2 s in both directions (CloudWatch `ReplicationLatency`: average 569 ms, maximum 903 ms). A conflicting write to the
   same item in both regions converged to the later write everywhere; the other was lost.
 - **The health route is shallow**: a region with a broken Lambda or table still looks healthy. A deeper check would call a real read.
-- **Shared fate for sign-in** (one user pool) and for the stack's definition (one Terraform state).
+- **Shared fate for sign-in** (one user pool) unless Google sign-in is also on, which gives each region its own pool, and for the stack's definition (one Terraform state).
 - **Cross-region cost and compliance:** orders now live in two regions; check data-residency rules before using real data.
 - **Delete handling:** deleting the replica needs the switch off; the global table keeps working in the remaining region.
 
@@ -421,10 +421,10 @@ scripts/demo/google-signin.py --forget                   # delete the saved toke
 | Setting | Value |
 |---|---|
 | Tier | `LITE`: 10,000 monthly active users free, permanently. `PLUS` is rejected (no free tier). |
-| Sign-up | Admin-created users only (no self sign-up) |
+| Sign-up | Admin-created users only (no self sign-up). With the optional [Google sign-in](#sign-in-with-google-optional-off-by-default), Cognito also creates a user on a Google user's first sign-in, but only if the guard Lambda allows the address |
 | Sign-in | Email address; strong password policy (12+ characters, upper, lower, number, symbol) |
 | MFA | Optional, app-based TOTP only (free). SMS MFA is billed and not configured. |
-| App client | Public (no secret), `USER_PASSWORD_AUTH` for CLI testing; user-existence errors hidden; token revocation on |
+| App client | Public (no secret), `USER_PASSWORD_AUTH` for CLI testing; user-existence errors hidden; token revocation on. With Google sign-in a **second** client is added (code flow with PKCE, Google only, no password) and the first is untouched |
 | Tokens | ID and access tokens 60 min, refresh token 7 days |
 | Deletion protection | On. Set `deletion_protection_enabled = false` and apply before `terraform destroy`. |
 
@@ -488,6 +488,10 @@ sed "s/ACCOUNT_ID/$(aws sts get-caller-identity --query Account --output text)/"
 
  It only allows IAM on `save-order-*` and
 `serverless-api-pipeline-*` roles and the pipeline boundary policy.
+
+**No further permission-set change was needed** for the optional multi-region and Google sign-in features: the second region's roles and functions are named inside the `save-order-*` scope
+(`...-dr`), and the DynamoDB replica, Route 53, ACM and Cognito calls fall under `PowerUserAccess` (verified when they ran). What they do need is the **bootstrap apply** that widens the
+permissions boundary to the second region's table and log groups (a one-resource change), and they are applied **locally**: the pipeline's deploy role has no second-region, Route 53 or ACM access.
 
 ## CI/CD (GitHub Actions)
 
@@ -579,6 +583,24 @@ terraform apply   # creates real resources; Lambda and on-demand DynamoDB cost n
 ```
 
 To destroy, first set `deletion_protection_enabled = false` in `environments/dev/main.tf` and apply.
+
+**The optional switches** (`enable_api_cache`, `enable_dax`, `enable_waf`, `enable_multi_region`, `enable_federated_signin`) are command-line variables, and **every apply replaces the whole set**:
+repeat each switch you want to keep, or Terraform removes it. A plain `terraform apply` turns them all off. Secrets and personal data (`google_client_secret`, `allowed_emails`) go in
+`TF_VAR_...` environment variables in your shell, never on the command line or in a file. The multi-region and Google steps are in their sections and in
+[COGNITO_TESTING_RUNBOOK.md](../docs/COGNITO_TESTING_RUNBOOK.md).
+
+**Outputs** (`terraform output`; none is secret, and null outputs are not stored, so they are missing when their feature is off):
+
+| Output | Meaning |
+|---|---|
+| `orders_table_name`, `orders_table_arn` | The Orders table |
+| `save_order_function_name`, `save_order_function_arn` | The write Lambda |
+| `create_order_url`, `get_order_url`, `get_order_via_lambda_url`, `rest_api_id` | The API (primary region) |
+| `user_pool_id`, `user_pool_client_id` | The Cognito pool and its password client |
+| `dashboard_url` | The CloudWatch dashboard |
+| `dax_enabled`, `api_cache_enabled`, `waf_enabled`, `waf_web_acl_arn` | State of the cache, DAX and WAF switches |
+| `multi_region_enabled`, `dr_create_order_url`, `multi_region_health_check_ids` | Multi-region switch, the second region's API URL and the health check IDs (null when off) |
+| `federated_signin_enabled`, `federated_signin`, `dr_user_pool_id`, `dr_user_pool_client_id` | Google sign-in switch, the hosted host and browser client per region (used by `scripts/demo/google-signin.py`), and the second region's pool |
 
 ## State
 
