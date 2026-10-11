@@ -23,7 +23,7 @@ failure means an outage. Point-in-time recovery is also off (billed), so there i
 |---|---|---|
 | **RPO** (data you can lose) | Normally under 2 seconds of writes; unbounded for a write made in the failed region that had not replicated yet | Measured replication lag was 0.3 to 1.2 s (median about 0.8 s; CloudWatch average 569 ms, maximum 903 ms). Replication is asynchronous |
 | **RTO** (time to serve again) for API and data | About 1.5 to 3 minutes for a real failure | Three failed 30 s health checks (about 90 s) plus up to 60 s of DNS caching. **Measured 31 s** only for a *forced* failure, which skips the detection time. Clients that cache DNS longer take longer |
-| **RTO for new sign-ins** if us-east-1 Cognito is down | Not covered | One user pool, in us-east-1 |
+| **RTO for new sign-ins** if us-east-1 Cognito is down | Not covered by default (one user pool, in us-east-1). With Google sign-in and multi-region on, sign-in goes through the other region's pool; verified working, not tested during a real Cognito outage | See gap 1 below |
 | Concurrent writes to one item in both regions | One write is lost | Last writer wins (measured: both regions converged to the later write) |
 
 These are from one short demo from one client and one failure type. Treat them as order-of-magnitude figures, not guarantees.

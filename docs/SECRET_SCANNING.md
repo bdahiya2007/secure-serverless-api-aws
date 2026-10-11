@@ -23,6 +23,10 @@ Only content that is committed (or about to be) is scanned. Git-ignored local fi
 
 Use placeholders in docs and code: `ACCOUNT_ID`, `you@example.com`.
 
+**Not detected by the built-in rules** (so add them to your private block list below): a **Google OAuth client ID or secret** (a secret looks like `GOCSPX-...`), a **Cognito hosted-domain prefix**, your **domain
+names and Route 53 zone IDs**, and Cognito app client IDs. The client secret is also excluded from the repository by design (it is only ever a shell variable at apply time), and the scanner's email rule still catches a
+real address. Treat these as sensitive anyway.
+
 ## Enable the hook (once per clone)
 
 ```bash

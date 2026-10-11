@@ -209,6 +209,12 @@ allowance is reached first.
   example is $0.038 per hour for 1.6 GB, about $27 a month; the smallest 0.5 GB size is cheaper (about $0.02 per hour, about $15 a
   month, **unverified**). A cache hit saves the backend's share of a request, not the network round trip.
 
+- **Multi-region active/active** (`enable_multi_region`): every write is **billed again in the replica region** (replicated write units) plus storage there, the second stack adds its own request charges,
+  and each Route 53 health check is a monthly charge with no free tier (roughly $1 to $2 each; **not verified**), plus about $0.60 per million DNS queries. A 30 minute demo was estimated at a few cents; left on, the
+  health checks alone would be a few dollars a month. See [DISASTER_RECOVERY.md](DISASTER_RECOVERY.md).
+- **Sign-in with Google** (`enable_federated_signin`): free at this scale (Cognito Lite includes social sign-in and Lambda triggers, with 10,000 free monthly active users per account; the guard Lambda is inside the Lambda free tier; Google is free).
+  Social users are billed as ordinary monthly active users; **SAML and OIDC enterprise federation would be billed differently**, and is not used.
+
 - **Provisioned concurrency**, one always-warm 512 MB environment: **about $5.40 per month**, billed whether or not
   anyone calls the API, plus normal request and duration charges. It removes cold starts but is not free-tier eligible.
 - **Worst-case abuse:** the stage throttle is 5 requests per second. Sustained for a whole month that is about 13 million
@@ -250,6 +256,19 @@ allowance is reached first.
 | **Cache bypass to force backend load** | `Cache-Control: max-age=0` is ignored | Unique ids always miss the cache |
 | **Order data at rest in the cache** | Cache data is encrypted | The cache holds order contents for up to the TTL |
 | **Cost left running** | Off by default; the deploy applies with it off, so a push to `main` removes it | Left on by hand it bills every hour |
+
+### Multi-region and Google sign-in (when switched on)
+
+| Risk | How it is handled here | Residual |
+|---|---|---|
+| **Lost writes on conflict** | Orders are keyed by order and item, so a conflict needs the same item written in both regions at once; the later write wins | One write is silently lost; counters and balances would need a different design |
+| **A bad write or delete is copied to both regions** | None by default | Replication is not a backup; point-in-time recovery is off (billed) |
+| **Anyone with a Google account could sign in** | A guard Lambda allow-lists addresses on sign-up **and on every token and refresh**, fails closed, logs only the decision; the consent screen stays in Testing mode | An ID token issued before an address is removed works until it expires (up to 60 minutes) |
+| **Secrets and personal data** | The Google client secret and the allowed addresses are supplied at apply time and never committed | They are stored in the Terraform state and the guard's environment variable |
+| **A second API without the first one's protections** | Same authorizer, throttle, validation and permissions boundary; the WAF follows `enable_waf` | No second-region alarms or dashboard; the health route is open (it returns a fixed body) |
+| **Wider pipeline scope** | The boundary now covers the second region's table and log groups; the deploy role gets nothing new and the pipeline refuses to run while the setup is on | Applied locally, outside the approval-gated pipeline |
+
+Details: [DISASTER_RECOVERY.md](DISASTER_RECOVERY.md) and [COGNITO_TESTING_RUNBOOK.md](COGNITO_TESTING_RUNBOOK.md).
 
 ### Direct DynamoDB read
 
