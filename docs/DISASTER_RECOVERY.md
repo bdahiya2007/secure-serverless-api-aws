@@ -66,7 +66,9 @@ is the next level and has not been done here. Repeat the test after any change t
 ## Known gaps and what to do before relying on this
 
 1. **Sign-in in one region.** Built behind `enable_federated_signin` (with multi-region on): a pool in each region, both APIs trusting both pools, and
-   Google as the identity provider so there are no users to copy. **Verified live**: each pool's token was accepted by both APIs, and a sign-in and refresh worked in each region
+   Google as the identity provider so there are no users to copy. (The other option is Cognito's own
+   [multi-Region replication](https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-multi-region.html): a replica pool with a shared directory and automatic failover, but it needs the Essentials or Plus plan,
+   a multi-Region KMS key and add-on costs, cannot create users in the secondary, and has no TOTP MFA there. Not evaluated here; see the FAQ.) **Verified live**: each pool's token was accepted by both APIs, and a sign-in and refresh worked in each region
    ([runbook](COGNITO_TESTING_RUNBOOK.md)). Not verified: sign-in while one region's Cognito is actually down. Whenever the switch is off, sign-in depends on the us-east-1 pool. Owner ids must come from Google (email or Google subject), not Cognito's `sub`, which differs per pool. See the
    [runbook](../terraform/README.md#sign-in-with-google-optional-off-by-default).
 2. **Shallow health check.** It proves API Gateway is up, not DynamoDB or Lambda. Add a deeper check before trusting automatic failover for data-plane failures.

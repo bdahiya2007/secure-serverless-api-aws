@@ -42,10 +42,27 @@ For an immediate cut-off also run `aws cognito-idp admin-user-global-sign-out` a
 
 ### Can a token from one region's pool be used in the other region?
 With multi-region and Google sign-in both on, each region has its own pool and **both APIs trust both pools**. Verified: all four combinations (each pool's token on each API) were accepted. With multi-region alone there is one pool in us-east-1 that both APIs trust.
-Cognito cannot replicate users between regions, which is why Google (an external identity provider) is used instead of copying users.
+Two separate pools do not share users, which is why Google (an external identity provider) is used: nothing has to be copied. Cognito's own multi-Region replication would share them; see the next question.
+
+### Does Cognito have built-in multi-Region replication, and why is it not used here?
+Yes: [multi-Region replication (MRR)](https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-multi-region.html) creates a **replica user pool** in a second region that shares the primary's user directory and user pool ID, and can fail over managed login, federation and
+direct API calls using a Route 53 health check on the pool's domain. It was **not used** because of its requirements and limits (from the AWS page):
+
+| | Multi-Region replication | This project's pool-per-region with Google |
+|---|---|---|
+| Plan | **Essentials or Plus**, not Lite | Lite (free) |
+| Extra needs | A **multi-Region customer managed KMS key**, and separate add-on costs (KMS keys bill monthly; amounts unverified) | None |
+| Users | One shared directory | Separate pools; Google is the single source of identity |
+| New users in the second region | **Not possible** (the secondary cannot create users); a federated user can use the secondary only if they **signed in to the primary before** | A first Google sign-in creates the user in either region, if the guard allows |
+| MFA | TOTP is **not supported** in the secondary | TOTP optional in each pool |
+| Failover | Automatic, from a Route 53 health check on the pool's domain | Clients (or Route 53 on the API) choose a region; sign-in itself is not auto-failed-over |
+| Per-user identity | Shared directory, so the user is the same across regions (expected; **not tested here**) | A different Cognito `sub` per pool, so ownership must key on the Google identity |
+
+It would be the better production choice for password or admin-created users and for automatic sign-in failover, if the plan and cost are acceptable. **Not evaluated here:** whether the Terraform provider can manage replicas, how API Gateway's authorizer treats a replica's ARN,
+and the exact cost. It is on the to-do list.
 
 ### Why does the same person have two different Cognito IDs?
-Each pool assigns its own `sub`. When per-user ownership of orders is built it must key on the Google email or Google subject, not Cognito's `sub`, or one person would look like two.
+With two separate pools (this project's setup) each pool assigns its own `sub`, so when per-user ownership of orders is built it must key on the Google email or Google subject, not Cognito's `sub`, or one person would look like two. (Cognito's multi-Region replication shares one directory, which should avoid this; not tested here.)
 
 ### I got 404 when testing a token. Is that a failure?
 No: **404 means the token was accepted** and the order does not exist. A **401** is the refusal (no token, a garbage token, an expired one, or a token from a pool the API does not trust).

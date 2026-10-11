@@ -290,7 +290,7 @@ For a new account, region pair or environment (staging, production), change only
 4. **State and permissions:** each environment has its own state and role; the demo is applied locally because the pipeline's deploy role cannot manage the second region, Route 53 or ACM. If you want the pipeline to run it, grant those scoped permissions first and decide who approves.
 5. **Domain:** a name in an existing hosted zone (Part B only), and a certificate per region (created by Terraform).
 6. **Time-box and approvals:** note the start time and the cost approval.
-7. **Production extras this runbook does not cover:** a deeper health check (reads through the API), point-in-time recovery, alarms in both regions, ownership of orders keyed on the Google identity (not the Cognito `sub`, which differs per pool), and moving the Google consent screen out of Testing mode.
+7. **Production extras this runbook does not cover:** a deeper health check (reads through the API), point-in-time recovery, alarms in both regions, ownership of orders keyed on the Google identity (not the Cognito `sub`, which differs per pool), moving the Google consent screen out of Testing mode, and **evaluating Cognito's own [multi-Region replication](https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-multi-region.html)** (Essentials or Plus plan, a multi-Region KMS key, add-on costs; secondary pools cannot create users and have no TOTP MFA). If you move to it the tests change: the replica starts `INACTIVE` and must be activated, failover is driven by a Route 53 health check on the pool's domain, and the user pool ID is shared, so repeat the cross-region token checks (T6) and the failover test against the replica.
 
 ## 10. Troubleshooting: every problem met so far
 
