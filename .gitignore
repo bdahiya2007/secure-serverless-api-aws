@@ -56,3 +56,7 @@ TODO.md
 
 # Built Lambda package that includes the DAX client (scripts/build-dax-package.sh)
 build/
+
+# --- Python bytecode (created when a script is imported) ---
+__pycache__/
+*.pyc

@@ -21,7 +21,7 @@ Contents: [0 Safety](#0-safety-rules-read-first) | [1 What is tested](#1-what-is
 | The **allowed addresses** go only in `TF_VAR_allowed_emails` in your shell. | Personal data. They end up in the guard's environment variable and the state. |
 | **Never paste or reload a callback link** (`http://localhost:8765/callback?code=...`). | It is the *result* of a sign-in, works once, and shows "refused to connect" afterwards. A leaked code is short-lived and useless without the script's private PKCE value, but do not share it anyway. |
 | **Tokens are credentials.** The helper writes them to `~/.cache/orders-api/` (mode 0600) and never prints them. Delete them when done. | An ID token works for about an hour; a refresh token for about 7 days. |
-| Before committing anything from a test, scan the staged content (`python3 scripts/secret-scan.py --staged`) and check for your domain, prefix, client ID, account ID and addresses. | The repository is public. |
+| Before committing anything from a test, scan the staged content (`python3 scripts/secret-scan.py --staged`; it now flags Google client secrets and IDs, Google tokens and real Cognito hosted domains) and also check for your domain, prefix, app client IDs, zone ID, account ID and addresses, which it cannot know: put them in your private block list ([SECRET_SCANNING.md](SECRET_SCANNING.md)). | The repository is public. |
 | Cost: the one-region test costs nothing; the two-region test costs cents per half hour. Get approval, time-box it and switch off. | The replica, second stack and health checks bill by the hour. |
 
 ## 1. What is tested
