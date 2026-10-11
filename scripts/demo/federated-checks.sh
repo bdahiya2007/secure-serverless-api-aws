@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Checks for sign-in with Google (enable_federated_signin). First sign in with the helper, once per region you test:
-#   scripts/demo/google-signin.py                       # the primary region's pool
-#   scripts/demo/google-signin.py --region us-west-2    # the second region's pool (only with enable_multi_region)
+#   scripts/demo/google-signin.py --private             # the primary region's pool (a private window; use the ALLOWED address)
+#   scripts/demo/google-signin.py --private --region us-west-2   # the second region's pool (only with enable_multi_region)
 # Then run this script. It reads the saved ID tokens (never prints them) and checks that:
 #   1 requests without a token, or with a garbage token, get 401 on every API
 #   2 a token from each pool is accepted by every API (a 404 for a missing order means "accepted"; 401 means "refused")
@@ -14,8 +14,12 @@ cd "$(git rev-parse --show-toplevel)/terraform/environments/dev"
 CACHE=~/.cache/orders-api
 P_REGION=${AWS_REGION:-us-east-1}
 P_BASE=$(terraform output -raw create_order_url); P_BASE=${P_BASE%/orders}
-D_URL=$(terraform output -json dr_create_order_url | tr -d '"'); D_BASE=""; [ "$D_URL" != "null" ] && D_BASE=${D_URL%/orders}
-D_REGION=$(terraform output -json federated_signin | python3 -c "import sys,json; c=json.load(sys.stdin) or {}; print(next((r for r in c if r!='$P_REGION'),''))")
+# Terraform does not store null outputs, so with multi-region off these outputs are simply missing.
+D_URL=$(terraform output -json dr_create_order_url 2>/dev/null | tr -d '"'); D_BASE=""; [ -n "$D_URL" ] && [ "$D_URL" != "null" ] && D_BASE=${D_URL%/orders}
+D_REGION=$(terraform output -json federated_signin 2>/dev/null | python3 -c "import sys,json
+try: c=json.load(sys.stdin) or {}
+except Exception: c={}
+print(next((r for r in c if r!='$P_REGION'),''))")
 PFX="fed-$(openssl rand -hex 3)"
 cleanup() {
   python3 - "$PFX" <<'PY'

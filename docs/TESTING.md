@@ -274,14 +274,16 @@ existing site's records are unchanged. A push to `main` also refuses to run whil
 
 ## 8. Sign-in with Google (optional)
 
-Off by default (`enable_federated_signin`). Needs your own Google OAuth client; setup, the apply command and removal are in the
+Off by default (`enable_federated_signin`). The full step-by-step procedure for one region and for two regions, with expected results, every
+troubleshooting case met so far and how to repeat it in another environment, is in
+[COGNITO_TESTING_RUNBOOK.md](COGNITO_TESTING_RUNBOOK.md). Setup (your own Google OAuth client) and the apply command are in the
 [runbook](../terraform/README.md#sign-in-with-google-optional-off-by-default). Unit tests for the guard run with the others (`node --test "src/*/*.test.mjs"`).
 
 ```bash
-scripts/demo/google-signin.py                       # sign in with Google in a browser; saves the ID token locally (mode 0600)
-scripts/demo/google-signin.py --region us-west-2    # the second region's pool (only with enable_multi_region)
-scripts/demo/federated-checks.sh                    # what the table below describes
-scripts/demo/google-signin.py --forget              # delete the saved tokens when finished
+scripts/demo/google-signin.py --private                       # opens a private window; sign in with the ALLOWED address; saves the ID token (mode 0600)
+scripts/demo/google-signin.py --private --region us-west-2    # the second region's pool (only with enable_multi_region)
+scripts/demo/federated-checks.sh                              # what the table below describes
+scripts/demo/google-signin.py --forget                        # delete the saved tokens when finished (add --region for the second)
 ```
 
 | Check | Expect |
@@ -289,10 +291,12 @@ scripts/demo/google-signin.py --forget              # delete the saved tokens wh
 | No token, and a garbage token, on every API | 401 |
 | A token from each pool on each API | 200 or 404 (accepted; 404 means the order does not exist). 401 means refused |
 | A write with a Google token, read back, and in the other region | 201, then 200 (cross-region within a few seconds) |
-| **Removed from the allow-list:** re-apply with a different `allowed_emails`, then `google-signin.py --refresh` | The refresh is **refused** (the guard runs on every token), so a user who already has a profile is locked out too |
-| **A Google account that is not on the list** (a second account, if you have one) | The hosted page shows an error and no user is created |
+| **Removed from the allow-list:** re-apply with a different `allowed_emails`, then `google-signin.py --refresh` | The refresh is **refused** (the guard runs on every token), so a user who already has a profile is locked out too. A token issued *before* the removal still works until it expires (up to 60 minutes) |
+| **A Google test user that is not on the list** | Google lets them through and Cognito refuses: no user is created (the guard log shows a `deny`). The browser may then show "refused to connect"; that is the callback after the script has exited, not a failure |
 
-Tokens are credentials: the scripts never print them, and they are never in the repository. The Google users stay in the pools after the test.
+Rules that avoid the common mistakes: a callback link (`http://localhost:8765/callback?code=...`) works **once** and only while the script is waiting; never paste or
+reload it. Every sign-in needs a **fresh run** of the script and a **private window** (a normal window reuses your existing Google session and may sign in as an address that is not
+on the list). Tokens are credentials: the scripts never print them and they are never in the repository.
 
 ## Troubleshooting
 

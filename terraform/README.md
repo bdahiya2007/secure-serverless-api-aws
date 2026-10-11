@@ -398,7 +398,7 @@ export TF_VAR_google_client_secret='...'                 # the secret: shell onl
 export TF_VAR_allowed_emails='["you@example.com"]'          # personal data: shell only
 terraform apply -var enable_federated_signin=true -var federated_domain_prefix=<prefix> -var google_client_id=<client id>
 #   add -var enable_multi_region=true ... to also create the second region's pool (see the multi-region section)
-cd ../../.. && scripts/demo/google-signin.py             # sign in with Google in a browser; saves the tokens (mode 0600)
+cd ../../.. && scripts/demo/google-signin.py --private   # opens a PRIVATE window: sign in with an ALLOWED address; saves the tokens (mode 0600)
 scripts/demo/federated-checks.sh                         # accepted by the APIs, write and read back
 cd terraform/environments/dev && terraform apply         # REMOVE it: re-apply WITHOUT the variables
 terraform output federated_signin_enabled                # must print false
@@ -410,7 +410,9 @@ scripts/demo/google-signin.py --forget                   # delete the saved toke
 - **The allow-list is an environment variable** on the guard (visible to administrators in the console and in state). It is personal data, not a credential, but keep it out of the repository.
 - **Google users stay in the pool** after the switch is turned off (the primary pool is deletion protected); delete them with `aws cognito-idp admin-delete-user` if you want them gone.
 - **Same person, different ids.** Each pool gives the same Google user a different Cognito `sub`. When per-user ownership of orders is built, it must key on the Google email or the Google subject, not the Cognito `sub`.
-- **Browser flow.** Token requests use a browser redirect to `http://localhost:8765/callback`; the helper script stores tokens (credentials) in `~/.cache/orders-api/`. The ID token lasts about an hour; the refresh token about 7 days.
+- **Browser flow.** Token requests use a browser redirect to `http://localhost:8765/callback`; the helper script stores tokens (credentials) in `~/.cache/orders-api/`. The ID token lasts about an hour; the refresh token about 7 days. Use `--private` (a normal window reuses your existing Google session), keep the terminal open until it says "Saved tokens", and never reuse a callback link: it works once.
+- **Removing an address stops new tokens, not existing ones.** Verified: a refresh was refused after removal, but an ID token issued earlier still worked until it expired (up to 60 minutes). For an immediate cut-off also run `aws cognito-idp admin-user-global-sign-out` and `admin-disable-user`, or shorten the token lifetime.
+- **Verified live (2026-10-10 and 11),** including with two regions; the step-by-step procedure and results are in [COGNITO_TESTING_RUNBOOK.md](../docs/COGNITO_TESTING_RUNBOOK.md).
 - **In Testing mode Google expires refresh tokens after 7 days** and only the listed test users can sign in.
 - The hosted domain prefix is unique per region across all AWS accounts; Terraform fails if it is taken.
 
