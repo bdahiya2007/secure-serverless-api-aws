@@ -32,6 +32,7 @@ scripts/e2e-test.sh                # end-to-end smoke test with automatic cleanu
 scripts/compare-reads.sh           # interleaved latency comparison: direct read vs Lambda read (cleans up)
 scripts/build-dax-package.sh       # builds the read Lambda package with the DAX client (only for the optional DAX switch)
 scripts/secret-scan.py             # secret / sensitive-data scanner (pre-commit hook and CI)
+scripts/check-doc-links.py         # checks every Markdown link and heading anchor (CI)
 scripts/demo/                      # behaviour checks for the cache, DAX, WAF, multi-region and Google sign-in demos (clean up after themselves)
 scripts/benchmark/                 # cold-start and memory benchmark (temporary function, cleans up)
 docs/TESTING.md                    # how to test: unit, end-to-end, observability, pipeline, WAF

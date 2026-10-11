@@ -62,6 +62,12 @@ jobs:
       - name: Run Lambda unit tests
         run: node --test "src/*/*.test.mjs"
 
+      # Every relative link and #anchor in the Markdown files must resolve (a wrong anchor silently goes nowhere).
+      - name: Check documentation links
+        run: |
+          python3 scripts/check-doc-links.py --self-test
+          python3 scripts/check-doc-links.py
+
       - name: Fail if state or variable files are committed
         run: |
           if git ls-files | grep -E '\.(tfstate|tfvars)(\.|$)|\.tfstate\.backup$'; then

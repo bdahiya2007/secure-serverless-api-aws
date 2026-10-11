@@ -35,9 +35,12 @@ Gateway proxy events (JSON and base64 bodies, malformed JSON) and the generic 50
 terraform fmt -check -recursive terraform
 cd terraform/environments/dev
 terraform init -backend=false && terraform validate
+cd ../../..
+python3 scripts/check-doc-links.py --self-test && python3 scripts/check-doc-links.py   # every Markdown link and #anchor must resolve
 ```
 
-CI runs both of these, plus the unit tests, on every pull request.
+CI runs all of these, plus the unit tests, on every pull request. The link check exists because an anchor written from memory is easy to get wrong: GitHub drops
+punctuation, so the anchor for "Multi-region, active/active" is `multi-region-activeactive`, and a wrong one silently goes nowhere (seven links were broken that way before the check existed).
 
 ## 3. End-to-end against the deployed API
 
