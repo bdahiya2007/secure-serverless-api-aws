@@ -152,7 +152,7 @@ scripts/compare-reads.sh  # interleaved latency comparison: direct read vs Lambd
 scripts/demo/             # behaviour checks and helpers for the cache, DAX, WAF, multi-region and Google sign-in demos (see docs/DEMO_RESULTS.md)
 scripts/build-dax-package.sh  # builds the read Lambda package with the DAX client (only for the optional DAX switch)
 .github/workflows/        # validate.yml and deploy.yml
-docs/                     # TESTING.md, SECRET_SCANNING.md, OPTIMIZATION_GUIDE.md, DEMO_RESULTS.md (cache, DAX, WAF, multi-region and Google sign-in demos), DISASTER_RECOVERY.md, COGNITO_TESTING_RUNBOOK.md and the IAM policy for the engineer's SSO permission set
+docs/                     # TESTING.md, SECRET_SCANNING.md, OPTIMIZATION_GUIDE.md, DEMO_RESULTS.md (cache, DAX, WAF, multi-region and Google sign-in demos), DISASTER_RECOVERY.md, COGNITO_TESTING_RUNBOOK.md, FAQ.md (design and measurement questions) and the IAM policy for the engineer's SSO permission set
 ```
 
 ## Try it
