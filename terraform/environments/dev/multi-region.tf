@@ -109,8 +109,8 @@ module "dr_api" {
   description = "REST API for creating orders (second region)"
   stage_name  = var.environment
 
-  # One Cognito user pool, in the primary region: this API validates the same tokens.
-  cognito_user_pool_arns = [module.orders_user_pool.user_pool_arn]
+  # The primary region's pool, plus the second region's pool when federated sign-in is on (see federated-signin.tf).
+  cognito_user_pool_arns = local.api_user_pool_arns
 
   enable_health_route = true
 

@@ -101,7 +101,7 @@ jobs:
       - name: Stop if multi-region is still switched on
         working-directory: ${{ env.WORKDIR }}
         run: |
-          n=$(terraform show -json tfplan | jq '[.resource_changes[] | select(.address | test("module\\.(dr_|primary_domain|multi_region_dns)|multi_region_check")) | select(.change.actions != ["no-op"])] | length')
+          n=$(terraform show -json tfplan | jq '[.resource_changes[] | select(.address | test("module\\.(dr_|primary_domain|multi_region_dns)|multi_region_check|aws_lambda_permission\\.dr_")) | select(.change.actions != ["no-op"])] | length')
           r=$(terraform show -json tfplan | jq '[.resource_changes[] | select(.address == "module.orders_table.aws_dynamodb_table.this") | select(((.change.before.replica // []) | length) != ((.change.after.replica // []) | length))] | length')
           if [ "$n" -gt 0 ] || [ "$r" -gt 0 ]; then
             echo "::error::Multi-region resources (second-region API, Route 53 records or the table replica) are in the state and this plan would change them, but the deploy role cannot manage them. Turn it off locally first (terraform apply without -var enable_multi_region=true), then re-run."

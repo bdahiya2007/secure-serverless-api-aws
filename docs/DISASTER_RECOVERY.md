@@ -35,7 +35,7 @@ These are from one short demo from one client and one failure type. Treat them a
 | us-east-1 API Gateway or Lambda | The health check fails; Route 53 stops answering with us-east-1; clients reach us-west-2 after detection plus DNS caching. Existing tokens keep working | **Yes** |
 | us-west-2 API Gateway or Lambda | The same, in the other direction | **Yes** |
 | DynamoDB impaired in one region | Writes and reads in that region fail, but the **health check does not notice** (it only checks that API Gateway is up) and Route 53 keeps sending clients there | **No.** Needs a deeper health check (a read through the Lambda), or a manual failover |
-| us-east-1 Cognito down | Valid tokens keep working in us-west-2 until they expire (about an hour); no new sign-ins or refreshes | **Partly.** See the production sign-in option below |
+| us-east-1 Cognito down | With Google sign-in and a pool in each region (built, not yet verified live): sign in through the other region's pool. Without it: valid tokens keep working in us-west-2 until they expire (about an hour), with no new sign-ins or refreshes | **Partly** (see gap 1) |
 | Both regions down, or a bad deploy to both | Outage; replication copies bad writes and deletes to the other region | **No.** A global table is not a backup. Use point-in-time recovery for that |
 | Accidental delete or corruption of data | Replicated to both regions within seconds | **No** (same reason) |
 | Route 53 or the DNS name itself | Clients cannot resolve the name | **No.** Route 53's data plane is highly available but it is still one dependency |
@@ -65,8 +65,10 @@ is the next level and has not been done here. Repeat the test after any change t
 
 ## Known gaps and what to do before relying on this
 
-1. **Sign-in in one region.** For production, use both Cognito pools trusted by both APIs, with users coming from a federated identity provider
-   (nothing to copy between regions). Owner ids must then come from the identity provider, not Cognito's `sub`, which differs per pool.
+1. **Sign-in in one region.** Built behind `enable_federated_signin` (with multi-region on): a pool in each region, both APIs trusting both pools, and
+   Google as the identity provider so there are no users to copy. **Not yet verified live**; until then, and whenever it is off, sign-in depends on the
+   us-east-1 pool. Owner ids must come from Google (email or Google subject), not Cognito's `sub`, which differs per pool. See the
+   [runbook](../terraform/README.md#sign-in-with-google-optional-off-by-default).
 2. **Shallow health check.** It proves API Gateway is up, not DynamoDB or Lambda. Add a deeper check before trusting automatic failover for data-plane failures.
 3. **No backup.** Turn on point-in-time recovery (billed per GB) so a bad write or delete can be undone; replication alone repeats it.
 4. **Conflicts.** Last-writer-wins is fine for this data (orders keyed by order and item). It is not fine for counters or balances.

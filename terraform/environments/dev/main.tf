@@ -159,6 +159,13 @@ module "orders_user_pool" {
   allow_admin_create_user_only = true       # no self sign-up; create users with the CLI
   mfa_configuration            = "OPTIONAL" # app-based TOTP only (free); SMS MFA is billed
   deletion_protection_enabled  = true
+
+  # Optional sign-in with Google (off by default); see federated-signin.tf.
+  domain_prefix           = local.federated_enabled ? var.federated_domain_prefix : null
+  google_client_id        = local.federated_enabled ? var.google_client_id : null
+  google_client_secret    = local.federated_enabled ? var.google_client_secret : null
+  federated_callback_urls = var.federated_callback_urls
+  signin_guard_lambda_arn = local.federated_enabled ? module.signin_guard[0].function_arn : null
 }
 
 # Role API Gateway assumes to read the Orders table directly. Read-only and scoped to this one table; it
@@ -179,7 +186,7 @@ module "orders_api" {
   description = "REST API for creating orders"
   stage_name  = var.environment
 
-  cognito_user_pool_arns = [module.orders_user_pool.user_pool_arn]
+  cognito_user_pool_arns = local.api_user_pool_arns
 
   # GET /health for the Route 53 health check, only while the multi-region setup is on.
   enable_health_route = var.enable_multi_region

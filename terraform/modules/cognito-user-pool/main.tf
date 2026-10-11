@@ -1,3 +1,5 @@
+data "aws_region" "current" {}
+
 resource "aws_cognito_user_pool" "this" {
   name = var.name
 
@@ -34,6 +36,22 @@ resource "aws_cognito_user_pool" "this" {
     }
   }
 
+  # Optional sign-in guard (a Lambda that allow-lists federated users). Pre sign-up stops a profile being created for a
+  # stranger; pre token generation runs on every sign-in and refresh, so removing someone from the list locks them out.
+  # V1_0 customises only the ID token, which every plan including Lite supports.
+  dynamic "lambda_config" {
+    for_each = var.signin_guard_lambda_arn == null ? [] : [1]
+
+    content {
+      pre_sign_up = var.signin_guard_lambda_arn
+
+      pre_token_generation_config {
+        lambda_arn     = var.signin_guard_lambda_arn
+        lambda_version = "V1_0"
+      }
+    }
+  }
+
   tags = var.tags
 }
 
@@ -59,4 +77,92 @@ resource "aws_cognito_user_pool_client" "this" {
     id_token      = "minutes"
     refresh_token = "days"
   }
+}
+
+# ---------------------------------------------------------------------------
+# Optional federated sign-in with Google through Cognito's classic hosted UI (all included in the Lite plan; social users
+# count as ordinary monthly active users). Off unless a domain prefix is given. The password client above is untouched.
+# ---------------------------------------------------------------------------
+
+locals {
+  federated = var.domain_prefix != null
+}
+
+resource "terraform_data" "federated_check" {
+  count = local.federated ? 1 : 0
+
+  lifecycle {
+    precondition {
+      condition     = var.google_client_id != null && var.google_client_secret != null
+      error_message = "domain_prefix (federated sign-in) needs google_client_id and google_client_secret."
+    }
+
+    precondition {
+      condition     = var.signin_guard_lambda_arn != null
+      error_message = "Federated sign-in needs the sign-in guard (signin_guard_lambda_arn). Without it any Google account could sign in."
+    }
+  }
+}
+
+resource "aws_cognito_user_pool_domain" "this" {
+  count = local.federated ? 1 : 0
+
+  domain       = var.domain_prefix
+  user_pool_id = aws_cognito_user_pool.this.id
+}
+
+resource "aws_cognito_identity_provider" "google" {
+  count = local.federated ? 1 : 0
+
+  user_pool_id  = aws_cognito_user_pool.this.id
+  provider_name = "Google"
+  provider_type = "Google"
+
+  provider_details = {
+    client_id        = var.google_client_id
+    client_secret    = var.google_client_secret
+    authorize_scopes = "openid email profile"
+  }
+
+  attribute_mapping = {
+    email          = "email"
+    email_verified = "email_verified"
+    name           = "name"
+    username       = "sub"
+  }
+}
+
+# A separate public app client for the browser (authorization code flow with PKCE). It offers Google only: no password
+# sign-in through the hosted pages, and no implicit flow.
+resource "aws_cognito_user_pool_client" "federated" {
+  count = local.federated ? 1 : 0
+
+  name         = "${var.name}-federated-client"
+  user_pool_id = aws_cognito_user_pool.this.id
+
+  generate_secret = false
+
+  allowed_oauth_flows_user_pool_client = true
+  allowed_oauth_flows                  = ["code"]
+  allowed_oauth_scopes                 = ["openid", "email", "profile"]
+  supported_identity_providers         = ["Google"]
+  callback_urls                        = var.federated_callback_urls
+  logout_urls                          = var.federated_callback_urls
+
+  explicit_auth_flows = ["ALLOW_REFRESH_TOKEN_AUTH"]
+
+  prevent_user_existence_errors = "ENABLED"
+  enable_token_revocation       = true
+
+  access_token_validity  = var.access_token_validity_minutes
+  id_token_validity      = var.id_token_validity_minutes
+  refresh_token_validity = var.refresh_token_validity_days
+
+  token_validity_units {
+    access_token  = "minutes"
+    id_token      = "minutes"
+    refresh_token = "days"
+  }
+
+  depends_on = [aws_cognito_identity_provider.google]
 }
