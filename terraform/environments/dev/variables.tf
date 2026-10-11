@@ -92,3 +92,48 @@ variable "route53_zone_name" {
   type        = string
   default     = null
 }
+
+variable "enable_federated_signin" {
+  description = "Turn on sign-in with Google (Cognito hosted pages, authorization code flow with PKCE) and a sign-in guard Lambda that only lets allowed_emails in. With enable_multi_region also on, a second user pool is created in dr_region and both APIs trust both pools. Free at this scale (Cognito Lite plan, 10,000 free monthly active users, Lambda free tier). Needs federated_domain_prefix, google_client_id, google_client_secret and allowed_emails at apply time; none of them is committed."
+  type        = bool
+  default     = false
+
+  validation {
+    condition = !var.enable_federated_signin || (
+      var.federated_domain_prefix != null && var.google_client_id != null && var.google_client_secret != null && length(var.allowed_emails) > 0
+    )
+    error_message = "enable_federated_signin needs federated_domain_prefix, google_client_id, google_client_secret and at least one allowed_emails entry."
+  }
+}
+
+variable "federated_domain_prefix" {
+  description = "Prefix of the hosted sign-in domain (<prefix>.auth.<region>.amazoncognito.com); unique per region across AWS. Pass it at apply time."
+  type        = string
+  default     = null
+}
+
+variable "google_client_id" {
+  description = "Client ID of the Google OAuth client (Google Cloud console, Web application). Not a secret."
+  type        = string
+  default     = null
+}
+
+variable "google_client_secret" {
+  description = "Client secret of the Google OAuth client. A SECRET: set it as TF_VAR_google_client_secret in your shell; never commit it or paste it anywhere. It is stored in the Terraform state."
+  type        = string
+  default     = null
+  sensitive   = true
+}
+
+variable "allowed_emails" {
+  description = "Google addresses allowed to sign in (case-insensitive). Personal data: set it as TF_VAR_allowed_emails (a JSON list) at apply time; never commit it. It is stored in the state and shown to administrators as a Lambda environment variable."
+  type        = list(string)
+  default     = []
+  sensitive   = true
+}
+
+variable "federated_callback_urls" {
+  description = "URLs the hosted pages may redirect back to. The default is the local helper script (scripts/demo/google-signin.py)."
+  type        = list(string)
+  default     = ["http://localhost:8765/callback"]
+}

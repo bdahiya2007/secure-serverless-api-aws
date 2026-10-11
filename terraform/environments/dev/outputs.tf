@@ -87,3 +87,26 @@ output "multi_region_health_check_ids" {
   description = "Route 53 health check ID per region (simulate a regional failure with aws route53 update-health-check --inverted), or null when off."
   value       = try(module.multi_region_dns[0].health_check_ids, null)
 }
+
+output "federated_signin_enabled" {
+  description = "Whether sign-in with Google (hosted pages and the sign-in guard) is on."
+  value       = var.enable_federated_signin
+}
+
+output "federated_signin" {
+  description = "Per region: hosted sign-in host and browser client id, for scripts/demo/google-signin.py. Null when off. Not secret."
+  value = local.federated_enabled ? merge(
+    { (var.aws_region) = { host = module.orders_user_pool.hosted_domain, client_id = module.orders_user_pool.federated_client_id } },
+    local.federated_dr_enabled ? { (var.dr_region) = { host = module.dr_user_pool[0].hosted_domain, client_id = module.dr_user_pool[0].federated_client_id } } : {},
+  ) : null
+}
+
+output "dr_user_pool_id" {
+  description = "Second region's Cognito user pool ID (federated sign-in with multi-region), or null."
+  value       = try(module.dr_user_pool[0].user_pool_id, null)
+}
+
+output "dr_user_pool_client_id" {
+  description = "Second region's password app client ID (for CLI test users), or null."
+  value       = try(module.dr_user_pool[0].client_id, null)
+}

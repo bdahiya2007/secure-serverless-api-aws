@@ -26,12 +26,13 @@ terraform/
     └── cloudwatch-dashboard/      # API Gateway Count/4XXError, Lambda Invocations/Errors
 src/save-order/                    # write Lambda: Node.js code and unit tests
 src/get-order/                     # read Lambda (alternative to the direct read): Node.js code and unit tests
+src/signin-guard/                  # Cognito trigger that allow-lists Google sign-ins (optional federated sign-in): code and unit tests
 .github/workflows/                 # validate.yml (PRs, no AWS) and deploy.yml (push to main, OIDC + approval)
 scripts/e2e-test.sh                # end-to-end smoke test with automatic cleanup
 scripts/compare-reads.sh           # interleaved latency comparison: direct read vs Lambda read (cleans up)
 scripts/build-dax-package.sh       # builds the read Lambda package with the DAX client (only for the optional DAX switch)
 scripts/secret-scan.py             # secret / sensitive-data scanner (pre-commit hook and CI)
-scripts/demo/                      # behaviour checks for the cache, DAX, WAF and multi-region demos (clean up after themselves)
+scripts/demo/                      # behaviour checks for the cache, DAX, WAF, multi-region and Google sign-in demos (clean up after themselves)
 scripts/benchmark/                 # cold-start and memory benchmark (temporary function, cleans up)
 docs/TESTING.md                    # how to test: unit, end-to-end, observability, pipeline, WAF
 docs/OPTIMIZATION_GUIDE.md         # when and why to use each optimization, with measurements, cost and security risks
@@ -328,7 +329,7 @@ nearest healthy region at one name. Either region can take reads and writes, and
 | Second stack | `save-order-dr`, `save-order-lookup-dr`, `save-order-api-read-role-dr` and an API with the same routes, each reading and writing its **own region's** replica. IAM names are global, hence the suffix (still inside the `save-order-*` scope). Same permissions boundary, 512 MB, X-Ray, throttling. The WAF rate limit is attached to the second API too when `enable_waf` is on. |
 | Names | A regional custom domain with a free ACM certificate in **each** region; Route 53 holds two latency alias records for the one name, each with a health check. Only records for that one name and the certificate validation are added; **existing records are never changed**. |
 | Health route | `GET /health` on each API: no token (a checker has none), answered by API Gateway itself (a MOCK integration; no Lambda or DynamoDB call) and returns `{"status":"ok","region":"..."}`. It shows that the regional API Gateway is up, **not** that DynamoDB or Lambda work. |
-| Sign-in | **One Cognito user pool, in the primary region.** The second API validates tokens against it. Users are not replicated, so new sign-ins depend on the primary region; tokens already issued keep working in the second region while the primary is down. **Verified in the demo:** the second region's API accepted a token from the primary-region pool (404 for a missing order; 401 without a token). For production see [DISASTER_RECOVERY.md](../docs/DISASTER_RECOVERY.md). | |
+| Sign-in | **One Cognito user pool, in the primary region.** The second API validates tokens against it. Users are not replicated, so new sign-ins depend on the primary region; tokens already issued keep working in the second region while the primary is down. **Verified in the demo:** the second region's API accepted a token from the primary-region pool (404 for a missing order; 401 without a token). With `enable_federated_signin` also on, a second pool exists in the second region and both APIs trust both pools (see [Sign-in with Google](#sign-in-with-google-optional-off-by-default)); see also [DISASTER_RECOVERY.md](../docs/DISASTER_RECOVERY.md). | |
 | Permissions | Bootstrap: the permissions boundary now also covers the second region's table and Lambda log groups (apply the bootstrap once, a one-resource change). The demo is applied **locally**; the deploy role has no second-region, Route 53 or ACM access, and `deploy.yml` stops with a clear message if the setup is still in the state. |
 
 ```bash
@@ -365,6 +366,54 @@ The hosted zone is already paid for by the existing site.
 
 See [TESTING.md](../docs/TESTING.md) for the replication, conflict and failover checks.
 
+## Sign-in with Google (optional, off by default)
+
+With `enable_federated_signin` on, people sign in with a Google account through Cognito's hosted pages, and the APIs accept the pool's ID token exactly as before.
+A **sign-in guard** Lambda lets only the addresses you list in. Nothing changes while the switch is off; the password client and CLI test users keep working either way.
+
+```
+browser -> Cognito hosted pages -> Google (consent screen in Testing mode) -> Cognito issues the pool's ID token -> API Gateway
+                                    pre sign-up trigger: refuses an address that is not on the list (no profile is created)
+                                    pre token generation trigger: runs on EVERY sign-in and refresh (a removed address is locked out)
+```
+
+| Setting | Value |
+|---|---|
+| Switch | `enable_federated_signin` (default `false`). Needs `federated_domain_prefix`, `google_client_id`, `google_client_secret` and `allowed_emails` at apply time. |
+| Cognito | Classic hosted UI on `<prefix>.auth.<region>.amazoncognito.com`, Google as an identity provider, and a **separate** public app client (`...-federated-client`): authorization code flow with PKCE only, scopes `openid email profile`, Google only (no password sign-in on the hosted pages, no implicit flow). The existing password client is untouched. |
+| Guard | `save-order-signin-guard` (`src/signin-guard`): 128 MB, 5 s (Cognito's limit), no AWS permissions beyond its own logs. Pre sign-up: federated users must be on the list and not explicitly unverified; administrator-created users (the CLI test users) pass; self sign-up and anything unknown are refused. Pre token generation: federated users are re-checked on every token, so removing an address also blocks refresh. It fails closed (an empty list admits nobody), says nothing about why, and never logs an email. |
+| Plan | Lite supports all of this (social sign-in, classic hosted UI, Lambda triggers); the free 10,000 monthly active users apply per account and include social sign-ins. |
+| With multi-region | A second pool (`orders-api-users-dr`, not deletion protected) and guard run in `dr_region`, and **both APIs trust both pools**: a client signed in through either region's pool works against either API, so sign-in no longer depends on one region. |
+| Pipeline | Applied locally. A push to `main` applies with the switch off and removes the hosted domain, provider, app client and guard (the deploy role can; it is scoped to `save-order-*` and the user pools). The second region's pieces are covered by the multi-region guard in `deploy.yml`. |
+
+**One-time Google setup (free, about 15 minutes):**
+1. In the Google Cloud console create a project; set up the OAuth consent screen with audience **External**, publishing status **Testing**, your address(es) under **Test users**, and the default scopes (`openid`, `email`, `profile`).
+2. Create an OAuth client of type **Web application** with these Authorized redirect URIs (the prefix is the one you choose):
+   `https://<prefix>.auth.us-east-1.amazoncognito.com/oauth2/idpresponse` and, for multi-region, `https://<prefix>.auth.us-west-2.amazoncognito.com/oauth2/idpresponse`.
+3. Keep the **client secret** out of the repository and out of chat: it goes only in your shell (below), and it is stored in the Terraform state (private, encrypted bucket).
+
+```bash
+cd terraform/environments/dev
+export TF_VAR_google_client_secret='...'                 # the secret: shell only
+export TF_VAR_allowed_emails='["you@example.com"]'          # personal data: shell only
+terraform apply -var enable_federated_signin=true -var federated_domain_prefix=<prefix> -var google_client_id=<client id>
+#   add -var enable_multi_region=true ... to also create the second region's pool (see the multi-region section)
+cd ../../.. && scripts/demo/google-signin.py             # sign in with Google in a browser; saves the tokens (mode 0600)
+scripts/demo/federated-checks.sh                         # accepted by the APIs, write and read back
+cd terraform/environments/dev && terraform apply         # REMOVE it: re-apply WITHOUT the variables
+terraform output federated_signin_enabled                # must print false
+scripts/demo/google-signin.py --forget                   # delete the saved tokens
+```
+
+**Trade-offs and security notes, read before turning it on:**
+- **Without the guard, any Google account could sign in** (Cognito creates the user automatically). The guard is therefore mandatory: Terraform refuses the switch without it, and the Google consent screen should stay in Testing mode with only your test users.
+- **The allow-list is an environment variable** on the guard (visible to administrators in the console and in state). It is personal data, not a credential, but keep it out of the repository.
+- **Google users stay in the pool** after the switch is turned off (the primary pool is deletion protected); delete them with `aws cognito-idp admin-delete-user` if you want them gone.
+- **Same person, different ids.** Each pool gives the same Google user a different Cognito `sub`. When per-user ownership of orders is built, it must key on the Google email or the Google subject, not the Cognito `sub`.
+- **Browser flow.** Token requests use a browser redirect to `http://localhost:8765/callback`; the helper script stores tokens (credentials) in `~/.cache/orders-api/`. The ID token lasts about an hour; the refresh token about 7 days.
+- **In Testing mode Google expires refresh tokens after 7 days** and only the listed test users can sign in.
+- The hosted domain prefix is unique per region across all AWS accounts; Terraform fails if it is taken.
+
 ## Cognito user pool
 
 | Setting | Value |
@@ -377,7 +426,7 @@ See [TESTING.md](../docs/TESTING.md) for the replication, conflict and failover 
 | Tokens | ID and access tokens 60 min, refresh token 7 days |
 | Deletion protection | On. Set `deletion_protection_enabled = false` and apply before `terraform destroy`. |
 
-Terraform does not create users, so no password ever lands in state. Create a test user:
+Terraform does not create users, so no password ever lands in state. (With the optional [Google sign-in](#sign-in-with-google-optional-off-by-default), Google users are created by Cognito on their first sign-in.) Create a test user:
 
 ```bash
 cd terraform/environments/dev
@@ -416,7 +465,7 @@ aws cognito-idp admin-delete-user --user-pool-id "$POOL" --username "$EMAIL"
 ## Tests
 
 See the [testing guide](../docs/TESTING.md) for every level, including `./scripts/e2e-test.sh`, which runs the
-API's success and failure cases against the deployed stack and removes its own test data. The two Lambdas have 28 unit tests using Node's built-in runner (no dependencies, Node 22+). The AWS call is
+API's success and failure cases against the deployed stack and removes its own test data. The three Lambdas have 44 unit tests using Node's built-in runner (no dependencies, Node 22+). The AWS call is
 injected, so no AWS access is needed. CI runs them on every pull request.
 
 ```bash
@@ -546,5 +595,6 @@ which is git-ignored; keep that file safe. `*.tfstate` and `*.tfvars` are never 
 - `enable_api_cache` — the API Gateway stage cache, billed by the hour while on (about $0.02 per hour for 0.5 GB, unverified); off by default.
 - API access logs, WAF logging and managed rule groups — not enabled.
 - `enable_multi_region` — the global table replica, a second-region API stack and Route 53 health checks and records; billed (replicated writes, storage, health checks); off by default.
+- `enable_federated_signin` — sign-in with Google and the guard Lambda; free at this scale (Cognito Lite, Lambda free tier); off by default.
 - `enable_dax` — a DAX cluster plus a Logs endpoint, billed per hour while on (about $0.05 per hour, with no free tier); off by default. The read Lambda joins the VPC only while it is on.
 - Dead-letter queue, CloudWatch alarms — not enabled.

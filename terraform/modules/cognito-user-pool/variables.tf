@@ -77,3 +77,44 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "domain_prefix" {
+  description = "Prefix of the hosted sign-in domain (<prefix>.auth.<region>.amazoncognito.com). Setting it turns on federated sign-in with Google and requires google_client_id and google_client_secret. Lower-case letters, numbers and hyphens; may not contain aws, amazon or cognito."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.domain_prefix == null || (can(regex("^[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$", coalesce(var.domain_prefix, "aa"))) && !can(regex("aws|amazon|cognito", coalesce(var.domain_prefix, "x"))))
+    error_message = "domain_prefix must be 2 to 63 lower-case letters, numbers or hyphens, start and end with a letter or number, and not contain aws, amazon or cognito."
+  }
+}
+
+variable "google_client_id" {
+  description = "Client ID of the Google OAuth client. Required with domain_prefix. Not a secret."
+  type        = string
+  default     = null
+}
+
+variable "google_client_secret" {
+  description = "Client secret of the Google OAuth client. Required with domain_prefix. A SECRET: pass it at apply time (TF_VAR_google_client_secret), never commit it. It is stored in the Terraform state."
+  type        = string
+  default     = null
+  sensitive   = true
+}
+
+variable "federated_callback_urls" {
+  description = "URLs the hosted pages may redirect back to after sign-in (and sign-out). http is allowed for localhost only."
+  type        = list(string)
+  default     = ["http://localhost:8765/callback"]
+
+  validation {
+    condition     = alltrue([for u in var.federated_callback_urls : startswith(u, "https://") || startswith(u, "http://localhost")])
+    error_message = "Callback URLs must use https, or http only for localhost."
+  }
+}
+
+variable "signin_guard_lambda_arn" {
+  description = "ARN of the sign-in guard Lambda (pre sign-up and pre token generation). Null means no guard. With federated sign-in on, a guard is required."
+  type        = string
+  default     = null
+}
