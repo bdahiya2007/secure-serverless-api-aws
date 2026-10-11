@@ -297,7 +297,8 @@ resource "aws_api_gateway_stage" "this" {
   tags = var.tags
 }
 
-# Stage-wide throttling. No logging or detailed metrics settings, so this needs no
+# Default throttling for every method in the stage: each method gets its own token bucket with these limits, and all callers
+# of a method share it (it is not per client). No logging or detailed metrics settings, so this needs no
 # account-level CloudWatch role and adds no cost.
 resource "aws_api_gateway_method_settings" "all" {
   rest_api_id = aws_api_gateway_rest_api.this.id
