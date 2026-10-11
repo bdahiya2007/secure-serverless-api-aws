@@ -147,6 +147,7 @@ src/get-order/            # read Lambda (Lambda alternative to the direct read):
 src/signin-guard/         # Cognito trigger that allow-lists Google sign-ins (optional): source and unit tests
 scripts/e2e-test.sh       # end-to-end smoke test with automatic cleanup
 scripts/secret-scan.py    # secret and sensitive-data scanner (pre-commit hook and CI)
+scripts/check-doc-links.py  # checks every Markdown link and heading anchor (CI)
 scripts/benchmark/        # cold-start and memory benchmark (temporary function, cleans up)
 scripts/compare-reads.sh  # interleaved latency comparison: direct read vs Lambda read (cleans up)
 scripts/demo/             # behaviour checks and helpers for the cache, DAX, WAF, multi-region and Google sign-in demos (see docs/DEMO_RESULTS.md)
