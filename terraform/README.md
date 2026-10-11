@@ -102,7 +102,7 @@ aws lambda invoke --function-name save-order \
 | Integration | Lambda proxy integration to `save-order` (only this API/stage/method may invoke it) |
 | Authorization | **Cognito user pool authorizer** (`COGNITO_USER_POOLS`): requests need a valid ID token in the `Authorization` header. The module rejects `NONE`; `AWS_IAM` is also supported. |
 | Request validation | JSON Schema model (`terraform/environments/dev/models/create-order.json`) rejects bad bodies before the Lambda runs. The Lambda validates again (defense in depth); keep the two in sync. |
-| Throttling | 5 requests/second, burst 10, stage-wide |
+| Throttling | 5 requests/second, burst 10, **per method** (the `*/*` default gives each method its own token bucket; all callers of a method share it, it is not per client). Requests rejected with 401 before the method is reached did **not** consume it in a test (see the WAF section) |
 | Not enabled | Access logs (needs an account-wide CloudWatch role), CORS, X-Ray on the API stage. A custom domain exists only with the optional multi-region setup. The stage cache and the WAF are available but **off by default** (see below). |
 
 Cost: REST API requests are about $3.50 per million. There is no charge while idle.
@@ -286,7 +286,13 @@ See [TESTING.md](../docs/TESTING.md) for the steps to verify it (hit, stale read
 
 A WAF web ACL with one rate-based rule blocks any IP that sends more than 100 requests in 5 minutes
 (HTTP 403). It is evaluated before API Gateway, so blocked requests never reach the authorizer or Lambda.
-API Gateway's own throttle (5 req/s, burst 10) is stage-wide; this rule is per IP.
+API Gateway's own throttle (5 req/s, burst 10) is a token bucket **per method**, shared by every caller of that method; this rule is per IP.
+
+**Why the WAF rule adds something (measured 2026-10-11, one client, one short run):**
+- With a valid token, 200 rapid requests to one method got 10 through (the burst), then 171 were `429`; a trickle of about 3 requests per second to a **different** method at the same moment was untouched (15 of 15 accepted). So the buckets are separate per method.
+- 200 rapid requests **without** a token all got `401` and no `429`: they were rejected before the throttle counted them, so the method throttle does **not** limit an unauthenticated flood. Whether API Gateway bills those 401s was not verified.
+- Because one caller can drain a method's bucket and cause `429` for everyone else, and unauthenticated floods bypass it, a per-IP rule in front of API Gateway is the control for both.
+- Separately, the **account's Lambda concurrency limit is 10** here, so about 10 or more parallel requests to a Lambda-backed route got `500` from the proxy (Lambda `Throttles` rose; the function had no errors).
 
 **Cost:** $5.00 per web ACL + $1.00 per rule per month, **prorated hourly and billed even when idle**,
 plus $0.60 per million requests. No free tier. One ACL with one rule is about $6 per month, or about

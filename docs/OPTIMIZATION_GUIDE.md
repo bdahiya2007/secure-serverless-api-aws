@@ -217,9 +217,10 @@ allowance is reached first.
 
 - **Provisioned concurrency**, one always-warm 512 MB environment: **about $5.40 per month**, billed whether or not
   anyone calls the API, plus normal request and duration charges. It removes cold starts but is not free-tier eligible.
-- **Worst-case abuse:** the stage throttle is 5 requests per second. Sustained for a whole month that is about 13 million
-  requests, or **about $45 of API Gateway charges** (plus backend cost). Mitigations: Cognito rejects unauthenticated
-  calls, the optional WAF rate limit is per IP, and the budget alerts email you.
+- **Worst-case abuse:** the throttle is 5 requests per second **per method** (each method has its own bucket, shared by all callers). With three data routes that is up to 15 requests per second, which
+  sustained for a whole month is about 39 million requests, or **about $136 of API Gateway charges** (plus backend cost); one route alone would be about 13 million and $45. (An earlier version of this guide
+  said the throttle was stage-wide and gave $45, which understated the ceiling threefold.) **Unauthenticated floods are not limited by the throttle** (measured: 200 rapid requests with no token all got `401`, no `429`),
+  and whether API Gateway bills them was not verified. Mitigations: Cognito rejects unauthenticated calls, the optional WAF rate limit is per IP and sits in front of all of this, and the budget alerts email you.
 
 ## 5. Security risks and how they are handled
 
@@ -232,7 +233,7 @@ allowance is reached first.
 | Version drift of the runtime SDK | Using the runtime-included SDK | No npm dependencies means no package supply-chain exposure; AWS patches the SDK | Behaviour can change with a runtime update; bundling would pin it but adds npm dependencies |
 | Hand-written type conversion | Slim imports (rejected) | Not shipped | It would need its own tests, because conversion bugs can corrupt or mis-type data |
 | Retry storms or hangs | Client timeouts (rejected) | SDK defaults apply | Too-aggressive timeouts can amplify load through retries |
-| Slightly higher cost per abused cold request | 512 MB | Throttle (5 rps, burst 10), Cognito auth, optional WAF, budget alerts | See the worst-case figure in section 4 |
+| Slightly higher cost per abused cold request | 512 MB | Throttle (5 rps, burst 10 per method), Cognito auth, optional WAF, budget alerts | See the worst-case figure in section 4 |
 
 ### DAX (when switched on)
 

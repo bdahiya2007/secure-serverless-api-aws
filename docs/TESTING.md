@@ -313,7 +313,7 @@ on the list). Tokens are credentials: the scripts never print them and they are 
 | `415 Unsupported Media Type` on a `GET` | A request sent a content type the template does not accept (`passthrough_behavior = NEVER`). Use `application/json` or no body. |
 | `400 {"message": "Invalid request body"}` (note the space) | API Gateway's schema check: a field is missing, wrong, or extra. |
 | `400` with an `errors` list | The Lambda's own validation, with the reasons. |
-| `429` | The 5 requests per second throttle. Slow down. |
+| `429` | The throttle on that method (5 requests per second, burst 10, per method, shared by all callers). Slow down. |
 | `call: command not found`, or empty `$POOL`, `$URL`, `$TOK` | New terminal: re-run the setup block, or use the script. |
 | `Backend initialization required` | Run `terraform init -reconfigure -backend-config="bucket=$(terraform -chdir=../../bootstrap output -raw state_bucket)"`. |
 | `The security token included in the request is expired` (AWS CLI) | Run `aws sso login` again. |
