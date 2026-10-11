@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Sign in with Google through the Cognito hosted pages and save the resulting ID token locally (authorization code + PKCE).
 
-  scripts/demo/google-signin.py [--region us-east-1]     sign in in a browser, save the tokens
+  scripts/demo/google-signin.py [--private] [--region us-east-1]   print a sign-in link (--private opens it in a private window), save the tokens
   scripts/demo/google-signin.py --refresh [--region R]   get new tokens from the saved refresh token (this runs the
                                                           sign-in guard again, so a user removed from the allow-list is refused)
   scripts/demo/google-signin.py --forget [--region R]    delete the saved tokens
@@ -58,7 +58,26 @@ def save(region, tokens):
           f"federated: {'identities' in claims}.")
 
 
-def browser_sign_in(region):
+def open_private(url):
+    """Open the link in a private (incognito) window so no existing Google or Cognito session is reused."""
+    quoted = url.replace("'", "''")  # PowerShell single quotes are literal; double any quote inside
+    on_wsl = "microsoft" in open("/proc/version").read().lower() if os.path.exists("/proc/version") else False
+    if on_wsl:
+        for exe, flag in (("chrome", "--incognito"), ("msedge", "-inprivate")):
+            ps = f"Start-Process -FilePath {exe} -ArgumentList '{flag}','{quoted}'"
+            if subprocess.run(["powershell.exe", "-NoProfile", "-Command", ps], capture_output=True).returncode == 0:
+                print(f"Opened a private {exe} window.")
+                return
+    else:
+        for cmd, flag in (("google-chrome", "--incognito"), ("chromium", "--incognito"), ("microsoft-edge", "--inprivate"), ("firefox", "--private-window")):
+            if subprocess.run(["which", cmd], capture_output=True).returncode == 0:
+                subprocess.Popen([cmd, flag, url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                print(f"Opened a private {cmd} window.")
+                return
+    print("Could not open a private window automatically; open the link above in one yourself.")
+
+
+def browser_sign_in(region, args_open=False):
     host, client_id = regional_config(region)
     verifier = secrets.token_urlsafe(64)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
@@ -84,11 +103,16 @@ def browser_sign_in(region):
 
     server = http.server.HTTPServer(("127.0.0.1", PORT), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    print(f"Open this URL in a browser and sign in with Google ({region}):\n\n{url}\n")
-    try:
-        webbrowser.open(url)
-    except Exception:
-        pass
+    print(f"Open this URL in a PRIVATE window (Incognito or InPrivate) and sign in with Google ({region}):\n\n{url}\n")
+    print("A normal window reuses your existing Google session and signs in as that account, which may not be on the allow-list.")
+    print("Each run makes one link that works once, and the script stops after the first callback. Waiting up to 5 minutes...")
+    if args_open == "private":
+        open_private(url)
+    elif args_open:
+        try:
+            webbrowser.open(url)
+        except Exception:
+            pass
     if not done.wait(300):
         sys.exit("Timed out after 5 minutes.")
     server.shutdown()
@@ -122,8 +146,15 @@ def forget(region):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--region", default=os.environ.get("AWS_REGION", "us-east-1"))
+    ap.add_argument("--open", action="store_const", const=True, default=False, help="also open the link in your default browser (a normal window, with your existing Google session)")
+    ap.add_argument("--private", dest="open", action="store_const", const="private", help="open the link in a private (incognito) window: recommended")
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--refresh", action="store_true")
     mode.add_argument("--forget", action="store_true")
     a = ap.parse_args()
-    (refresh if a.refresh else forget if a.forget else browser_sign_in)(a.region)
+    if a.refresh:
+        refresh(a.region)
+    elif a.forget:
+        forget(a.region)
+    else:
+        browser_sign_in(a.region, a.open)

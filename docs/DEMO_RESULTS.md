@@ -172,6 +172,33 @@ Route 53 health check price (roughly $1 to $2 each per month, prorated) was not 
 **Shutdown verified** after a plain `terraform apply`: `multi_region_enabled` false; no replica and no `Orders` table in us-west-2; no health checks; no certificates, custom domains,
 APIs or Lambdas in us-west-2; no `-dr` IAM roles; the zone back to its original records; the existing website returning 200; `terraform plan` showing no changes.
 
+## Third demo: sign-in with Google, in one and in two regions (2026-10-10 and 11)
+
+`enable_federated_signin` on (Cognito hosted pages with Google, a guard Lambda on the pre sign-up and pre token generation triggers), first alone, then with
+`enable_multi_region` so each region has its own pool and guard. The procedure to repeat it is in [COGNITO_TESTING_RUNBOOK.md](COGNITO_TESTING_RUNBOOK.md); the
+design is in the [runbook](../terraform/README.md#sign-in-with-google-optional-off-by-default). The Google client, domain, prefix and addresses used are the owner's and are not recorded here.
+
+| Test | Result |
+|---|---|
+| Resources created (one region) | Lite plan; both triggers attached; Google provider with `openid email profile` and attribute mapping; a separate code-flow-only, Google-only, secretless app client; guard 5 s, 128 MB |
+| Sign-in with an allowed address | Token from the primary pool (federated, about an hour, `email_verified`); guard `allow` on sign-up, sign-in and refresh |
+| A Google test user **not on the list** | Refused at sign-up (guard `deny`, Lambda error 1); **no user was created** |
+| **Lockout:** remove an address, then refresh | **Refused:** `PreTokenGeneration failed ... Sign-in is not permitted for this account` (guard `deny` on the refresh trigger) |
+| An ID token issued before the removal | **Still accepted by the API** (404, accepted) until it expires: a stateless-token limit of up to 60 minutes |
+| Guard logs | Decision and trigger only; no email (0 `@` characters in either region's logs) |
+| Two regions: each pool's token on each API | **4 of 4 accepted** (the Virginia pool's token on the Oregon API and the Oregon pool's token on the Virginia API); no token or a garbage token 401 on both |
+| Two regions: write and read across regions | Write through one region 201, read back 200, readable in the other region on the first poll |
+| Two regions: refresh | Allowed address refreshed through the second region's guard |
+| Switch off | Pool domain, provider, app client, both guards, the second pool and the whole second-region stack removed; the replica, health checks and certificates gone; the zone back to its original records; `terraform plan` clean. The two Google test users remain in the (deletion-protected) primary pool until deleted |
+
+**Mistakes and delays, all avoidable** (each is now handled or documented): the first two-region apply used the literal **placeholder address** (both guards admitted nobody real; fixed by a second apply);
+the helper script opened the **normal browser**, which reused the other Google session, so the guard rightly refused it (the script now has `--private` and no longer auto-opens a normal window);
+the callback link was **re-pasted** after use ("refused to connect" is expected once the script has exited); an apply was **paused with Ctrl+Z**, holding the state lock; one apply was run from the wrong folder;
+and a null Terraform output made `federated-checks.sh` stop early with multi-region off (fixed). WSL2 networking was tested and is not a cause.
+
+**Cost.** Google sign-in alone: nothing (Cognito Lite and Lambda free tiers; Google is free). The two-region part had the multi-region stack on for about 30 minutes: a few cents, estimated at
+about $0.07 per hour from list prices; the bill was not read.
+
 ## Shutdown (End) verified
 
 After the final `terraform apply` with no variables (about 20:10 UTC), a check found: `waf_enabled`, `api_cache_enabled` and `dax_enabled`
