@@ -12,6 +12,10 @@ order back (`GET /orders/{orderId}`) skips Lambda entirely: API Gateway calls Dy
 integration with request and response mapping templates. The same read also exists as a Lambda
 (`GET /orders-via-lambda/{orderId}`), so both styles can be compared like for like.
 
+Several features are built behind **off-by-default switches** because they bill or change behaviour, and each was measured in a short, time-boxed demo
+and switched off again: an API stage cache, DAX, a WAF rate limit, **multi-region active/active** (a DynamoDB global table with a second API stack
+behind Route 53), and **sign-in with Google** with an allow-list guard. See [Optional features at a glance](#optional-features-at-a-glance).
+
 ## Architecture
 
 ```mermaid
@@ -30,6 +34,17 @@ flowchart LR
   L -.-> CW
 ```
 
+**Optional sign-in with Google** (off by default, `enable_federated_signin`): the same pool and the same ID token, with Google as the identity provider and a guard Lambda that lets only allow-listed addresses in.
+
+```mermaid
+flowchart LR
+  B["Browser<br/>(private window)"] --> H["Cognito hosted pages<br/>authorization code + PKCE"]
+  H --> G["Google<br/>(consent screen in Testing mode)"]
+  G --> H
+  H -.->|"pre sign-up and<br/>pre token generation"| GU["Guard Lambda<br/>allow-list, fails closed<br/>runs on every sign-in and refresh"]
+  H -->|"pool's ID token"| API["API Gateway<br/>(same authorizer)"]
+```
+
 **Optional multi-region active/active** (off by default, `enable_multi_region`): Orders becomes a DynamoDB global table, and a second copy of the API runs in another region behind Route 53.
 
 ```mermaid
@@ -40,9 +55,13 @@ flowchart LR
   A1 --> T1[("Orders<br/>us-east-1")]
   A2 --> T2[("Orders replica<br/>us-west-2")]
   T1 <-->|"replication"| T2
-  CG["Cognito user pool<br/>(one, in us-east-1)"] -.-> A1
-  CG -.-> A2
+  CG1["Cognito pool + guard<br/>us-east-1"] -.-> A1
+  CG1 -.-> A2
+  CG2["Cognito pool + guard<br/>us-west-2<br/>(only with Google sign-in)"] -.-> A1
+  CG2 -.-> A2
 ```
+
+With multi-region alone there is **one** user pool (us-east-1) that both APIs trust. With Google sign-in on as well, **each region has its own pool and guard and both APIs trust both pools**, so sign-in does not depend on one region (verified live: each pool's token was accepted by both APIs).
 
 **Delivery pipeline:** nothing reaches AWS without a reviewed pull request, and nothing changes AWS without an approval.
 
@@ -63,12 +82,14 @@ flowchart LR
 - **Cost awareness:** idle cost is about $0, and every billed feature is off until deliberately enabled.
 - **Delivery discipline:** PR validation without AWS access, OIDC to AWS, manual approval, remote locked state.
 - **Operability:** a CloudWatch dashboard, X-Ray tracing, structured logs with bounded retention.
+- **Resilience and identity (optional):** multi-region active/active with measured replication lag and failover, and sign-in with Google behind an allow-list guard that also locks out removed users on refresh. Both were tested live and written up with their limits ([DISASTER_RECOVERY.md](docs/DISASTER_RECOVERY.md), [COGNITO_TESTING_RUNBOOK.md](docs/COGNITO_TESTING_RUNBOOK.md)).
 
 ## Security design
 
 | Area | What is in place |
 |---|---|
 | **Authentication** | Cognito user pool (Lite tier), admin-created users only, strong password policy, optional TOTP MFA. API Gateway rejects requests without a valid ID token before the Lambda runs. |
+| **Federated sign-in (optional)** | Google through Cognito's hosted pages (authorization code with PKCE, a separate Google-only app client with no secret and no password flow). A guard Lambda on the pre sign-up and pre token generation triggers admits only allow-listed addresses, on every sign-in **and refresh**, fails closed, and never logs an email. Tested: a non-listed Google account is refused with no user created, and a removed address is refused on refresh. **Known limit:** an ID token issued before removal works until it expires (up to 60 minutes). The client secret and the allow-list are supplied at apply time and never committed. |
 | **Input handling** | The API validates the body against a JSON Schema, and the Lambda validates again with an allow-list of fields. Malformed JSON and unknown fields get a 400 that never echoes the input. |
 | **No overwrites** | Writes use a condition expression, so an existing `orderId` + `itemId` returns 409 instead of being replaced. |
 | **Direct DynamoDB reads** | API Gateway assumes a role that can only `Query` the one Orders table, and the module rejects any write action or wildcard. The request template passes the path parameter as a string value (never as part of the query) and escapes it, and unmatched content types are rejected. DynamoDB errors are replaced with fixed 400 and 500 bodies, so internal details never reach the client. |
@@ -82,6 +103,18 @@ flowchart LR
 | **Optional speed-ups (off by default)** | The API Gateway stage cache and DAX are built behind switches that default to **off**, because they bill by the hour and trade freshness for speed. Cache entries are keyed by the order id, encrypted, and cannot be bypassed with `Cache-Control`; DAX sits behind a security group that admits only the read Lambda, with a read-only role and a TLS endpoint. When on, a read can be stale for up to the TTL after a write, and all signed-in users share cached responses. |
 | **Leak prevention** | A pre-commit hook and a CI job scan for credentials, AWS account and resource IDs, personal data and state or key files, and redact what they report ([details](docs/SECRET_SCANNING.md)). |
 | **Error and log hygiene** | 500 responses are generic, and logs record the error type and request ID, never order contents. |
+
+## Optional features at a glance
+
+All are off by default and applied locally for a short demo, then removed. Each has a runbook section, a check script in `scripts/demo/` and measured results.
+
+| Switch | What it adds | Measured result | Details |
+|---|---|---|---|
+| `enable_api_cache` | API Gateway stage cache (300 s) | About 6 to 7% faster on repeated reads; stale up to the TTL; 404s cached | [DEMO_RESULTS.md](docs/DEMO_RESULTS.md) |
+| `enable_dax` | DAX cluster for the read Lambda | **No gain**; cold start 0.58 s to 2.2 s; stale and cached-empty results | [DEMO_RESULTS.md](docs/DEMO_RESULTS.md) |
+| `enable_waf` | WAF per-IP rate limit | Blocked a burst after about 231 requests (limit 100; enforcement lags) for about 5 minutes | [DEMO_RESULTS.md](docs/DEMO_RESULTS.md) |
+| `enable_multi_region` | Global table replica, second-region API, Route 53 latency routing with health checks | Replication 0.3 to 1.2 s; a forced failover moved traffic in 31 s (a real one takes about 1.5 to 3 minutes); conflicts resolve to the last writer | [DISASTER_RECOVERY.md](docs/DISASTER_RECOVERY.md) |
+| `enable_federated_signin` | Google sign-in, the guard Lambda, and (with multi-region) a pool per region | Refusal and lockout verified; each pool's token accepted by both APIs; free at this scale | [COGNITO_TESTING_RUNBOOK.md](docs/COGNITO_TESTING_RUNBOOK.md) |
 
 ## Cost awareness
 
@@ -116,7 +149,7 @@ scripts/e2e-test.sh       # end-to-end smoke test with automatic cleanup
 scripts/secret-scan.py    # secret and sensitive-data scanner (pre-commit hook and CI)
 scripts/benchmark/        # cold-start and memory benchmark (temporary function, cleans up)
 scripts/compare-reads.sh  # interleaved latency comparison: direct read vs Lambda read (cleans up)
-scripts/demo/             # behaviour checks for the cache, DAX, WAF and multi-region demos (see docs/DEMO_RESULTS.md)
+scripts/demo/             # behaviour checks and helpers for the cache, DAX, WAF, multi-region and Google sign-in demos (see docs/DEMO_RESULTS.md)
 scripts/build-dax-package.sh  # builds the read Lambda package with the DAX client (only for the optional DAX switch)
 .github/workflows/        # validate.yml and deploy.yml
 docs/                     # TESTING.md, SECRET_SCANNING.md, OPTIMIZATION_GUIDE.md, DEMO_RESULTS.md (cache, DAX, WAF, multi-region and Google sign-in demos), DISASTER_RECOVERY.md, COGNITO_TESTING_RUNBOOK.md and the IAM policy for the engineer's SSO permission set
@@ -155,6 +188,10 @@ curl "$API_URL/orders/o-1001" -H "Authorization: $ID_TOKEN"
 The Lambda version, `GET /orders-via-lambda/{orderId}`, returns the same data with three differences: compact JSON, a
 `"truncated"` flag that tells the client when the 100-item cap cut the list off (the direct read cannot), and **`400`** for an
 invalid id (a Lambda can validate ids with an allow-list, while the direct read treats any id as a lookup and returns 404).
+
+To sign in with Google instead of a CLI test user (optional, `enable_federated_signin`), run `scripts/demo/google-signin.py --private` and sign in with an allowed address in
+the private window; it saves the ID token locally (never printed) and `scripts/demo/federated-checks.sh` exercises the APIs with it. The step-by-step procedure, for one and two regions, is in
+[COGNITO_TESTING_RUNBOOK.md](docs/COGNITO_TESTING_RUNBOOK.md).
 
 The full [testing guide](docs/TESTING.md) covers unit tests, an end-to-end script that cleans up after itself,
 observability checks and the pipeline. The three Lambdas have 44 unit tests using Node's built-in runner and no
@@ -316,6 +353,9 @@ It needs an AWS session and room for 5 parallel invocations (the account default
 - **ID token authorizer.** Simplest correct option for a first version. Scopes and an access-token flow would suit
   multiple resource servers.
 - **Separate bootstrap stack.** Slightly more manual work, in exchange for a pipeline that cannot rewrite its own permissions.
+- **Google as the identity provider, with a guard on the token trigger.** Cognito cannot replicate users between regions, so a pool per region with Google behind both avoids copying users. Pre sign-up alone would not stop a user who already has a profile, so the guard also runs on every token (the cost: tokens issued before a removal live until they expire).
+- **Active/active with one name, health-checked.** Route 53 latency routing sends each client to the nearest healthy region. The health route is shallow (it proves API Gateway is up, not DynamoDB), which is a documented gap.
+- **Features that bill are switches, applied locally.** The deploy role has no second-region, Route 53 or ACM access by design, and a push to `main` applies with every switch off.
 
 ## Known limitations and roadmap
 
