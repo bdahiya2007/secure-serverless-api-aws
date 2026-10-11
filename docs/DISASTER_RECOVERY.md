@@ -2,7 +2,7 @@
 
 What this project can and cannot survive, what to expect when a region fails, and how to test it. The design is optional and **off by
 default** (`enable_multi_region`, billed); the measured results are in [DEMO_RESULTS.md](DEMO_RESULTS.md) and the build details in the
-[runbook](../terraform/README.md#multi-region-active-active-global-table-optional-billed-off-by-default).
+[runbook](../terraform/README.md#multi-region-activeactive-global-table-optional-billed-off-by-default).
 
 ## What is built
 

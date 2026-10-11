@@ -46,7 +46,7 @@ Contents: [0 Safety](#0-safety-rules-read-first) | [1 What is tested](#1-what-is
   **Refresh the session before any long apply**: it can expire mid-apply and fail partway (see Troubleshooting).
 - A checkout of this repository on `main`, up to date, with the sign-in code merged (`src/signin-guard`, `scripts/demo/google-signin.py`).
 - A Google account to create the OAuth client (free, no billing), and one or two Gmail addresses to sign in with.
-- For the two-region test: an existing Route 53 public hosted zone and a name inside it for the API (see the [runbook](../terraform/README.md#multi-region-active-active-global-table-optional-billed-off-by-default)).
+- For the two-region test: an existing Route 53 public hosted zone and a name inside it for the API (see the [runbook](../terraform/README.md#multi-region-activeactive-global-table-optional-billed-off-by-default)).
 - A browser that can open a **private window** (Chrome, Edge, Firefox). On WSL2, `localhost` from Windows reaches a listener inside WSL (tested for `localhost` and `127.0.0.1`; IPv6 `::1` is not reachable, and browsers fall back to IPv4).
 - Unit tests pass before you start: `node --test "src/*/*.test.mjs"`.
 
@@ -181,8 +181,8 @@ was refused. The guard's log is the evidence, not the page.
 
 ## 7. Part B: Google sign-in in two regions
 
-Cost: about $0.07 per hour while the stack is on, plus per-request charges: cents for a 30 minute test. **Get approval first, apply, test quickly and switch off.**
-It also needs the Route 53 pieces (zone and a name), described in the [multi-region runbook](../terraform/README.md#multi-region-active-active-global-table-optional-billed-off-by-default).
+Cost: the stack's idle rate is mostly the two Route 53 health checks (roughly $3 a month in all, about $0.004 an hour; unverified), plus per-request and replicated-write charges: cents for a 30 minute test. (The $0.07 an hour figure elsewhere is for DAX, the cache and the WAF all on, not for this stack.) **Get approval first, apply, test quickly and switch off.**
+It also needs the Route 53 pieces (zone and a name), described in the [multi-region runbook](../terraform/README.md#multi-region-activeactive-global-table-optional-billed-off-by-default).
 
 **B1. Apply**
 

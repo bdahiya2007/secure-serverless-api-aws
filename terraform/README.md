@@ -52,7 +52,7 @@ docs/permission-set-inline-policy.json   # extra IAM your SSO permission set nee
 | Deletion protection | On (free) |
 | Point-in-time recovery | **Off** (billed per GB, no free tier) |
 | DynamoDB Streams | **On** (`NEW_AND_OLD_IMAGES`; free to enable, nothing reads it yet; a global table needs it) |
-| Global table replica | **Off** (`enable_multi_region`; billed, see [Multi-region](#multi-region-active-active-global-table-optional-billed-off-by-default)) |
+| Global table replica | **Off** (`enable_multi_region`; billed, see [Multi-region](#multi-region-activeactive-global-table-optional-billed-off-by-default)) |
 
 Outputs: `orders_table_name`, `orders_table_arn` (the Lambda policy is scoped to this ARN).
 

@@ -141,7 +141,7 @@ Behaviour with the API cache in front of DAX:
 
 `enable_multi_region` on (replica in `us-west-2`, a second API stack there, a custom domain and certificate per region, Route 53 latency records
 with two health checks), measured with `scripts/demo/multi-region-checks.sh`, then switched off. The design is in the
-[runbook](../terraform/README.md#multi-region-active-active-global-table-optional-billed-off-by-default) and the recovery objectives in
+[runbook](../terraform/README.md#multi-region-activeactive-global-table-optional-billed-off-by-default) and the recovery objectives in
 [DISASTER_RECOVERY.md](DISASTER_RECOVERY.md). The domain used is the owner's own and is not recorded here.
 
 | Check | Result |
@@ -196,8 +196,8 @@ the helper script opened the **normal browser**, which reused the other Google s
 the callback link was **re-pasted** after use ("refused to connect" is expected once the script has exited); an apply was **paused with Ctrl+Z**, holding the state lock; one apply was run from the wrong folder;
 and a null Terraform output made `federated-checks.sh` stop early with multi-region off (fixed). WSL2 networking was tested and is not a cause.
 
-**Cost.** Google sign-in alone: nothing (Cognito Lite and Lambda free tiers; Google is free). The two-region part had the multi-region stack on for about 30 minutes: a few cents, estimated at
-about $0.07 per hour from list prices; the bill was not read.
+**Cost.** Google sign-in alone: nothing (Cognito Lite and Lambda free tiers; Google is free). The two-region part had the multi-region stack on for about 30 minutes: a few cents (an earlier version of this page said
+about $0.07 an hour, which is the DAX, cache and WAF figure and was wrong for this stack: its idle cost is mostly the two health checks, roughly $3 a month, plus request and replicated-write charges; unverified); the bill was not read.
 
 ## Shutdown (End) verified
 
