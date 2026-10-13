@@ -145,8 +145,11 @@ terraform/
 └── README.md             # full technical reference and runbook
 src/save-order/           # write Lambda: source and unit tests
 src/get-order/            # read Lambda (Lambda alternative to the direct read): source and unit tests
+src/frontend/             # the browser app (plain JavaScript, no build): sign-in with PKCE, create and look up orders, unit tests
 src/signin-guard/         # Cognito trigger that allow-lists Google sign-ins (optional): source and unit tests
 scripts/e2e-test.sh       # end-to-end smoke test with automatic cleanup
+scripts/dev-frontend.py     # serves the app locally against the real API and sign-in, with the production security headers
+scripts/deploy-frontend.sh   # publishes the app to its bucket and refreshes CloudFront (runs the unit tests first)
 scripts/secret-scan.py    # secret and sensitive-data scanner (pre-commit hook and CI)
 scripts/check-doc-links.py  # checks every Markdown link and heading anchor (CI)
 scripts/benchmark/        # cold-start and memory benchmark (temporary function, cleans up)
@@ -196,7 +199,7 @@ the private window; it saves the ID token locally (never printed) and `scripts/d
 [COGNITO_TESTING_RUNBOOK.md](docs/COGNITO_TESTING_RUNBOOK.md).
 
 The full [testing guide](docs/TESTING.md) covers unit tests, an end-to-end script that cleans up after itself,
-observability checks and the pipeline. The three Lambdas have 44 unit tests using Node's built-in runner and no
+observability checks and the pipeline. The three Lambdas and the front end have 105 unit tests (62 and 43) using Node's built-in runner and no
 dependencies:
 
 ```bash
@@ -387,7 +390,7 @@ What this project does not do, why, and what comes next. When something ships, i
 | Not done | Why |
 |---|---|
 | Update and delete endpoints, and listing orders | The project demonstrates a create path and two read paths. A list needs a design (a `Scan` is unbounded and would expose every order), not just an endpoint. |
-| The browser app itself | The hosting (a private bucket behind CloudFront at its own name, with security headers and a dedicated certificate) is built; the app and its tests are next. The API can be called from a browser origin you list (CORS, `cors_allowed_origins`), and users sign in on Cognito's hosted pages. |
+| Automated browser tests of the app | The app and its hosting are built and unit-tested (43 tests); end-to-end browser tests are the next step. A manual checklist is in the testing guide. |
 | More environments (staging, prod) | One `dev` environment keeps cost and complexity low. Multi-region is built as an optional, off-by-default switch (see [Built, but switched off](#built-but-switched-off) and [DISASTER_RECOVERY.md](docs/DISASTER_RECOVERY.md)), but there is no separate production environment, state or approval path. |
 | A custom domain **in the default setup** | The API uses its default `execute-api` URL. A custom domain with a free certificate per region exists only inside the optional multi-region switch, because Route 53 needs an existing hosted zone and the names are not committed. |
 | A federated or production sign-in design | Sign-in uses one Cognito pool and the CLI password flow, for testing. Federation with an identity provider, hosted sign-in (PKCE) and a pool per region are described in [DISASTER_RECOVERY.md](docs/DISASTER_RECOVERY.md#known-gaps-and-what-to-do-before-relying-on-this) but not built. |

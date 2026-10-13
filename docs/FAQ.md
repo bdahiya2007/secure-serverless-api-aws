@@ -361,6 +361,18 @@ Only the page itself for scripts, styles, images and fonts; and for network call
 ### Is the front end protected by a WAF?
 Not by default. A web ACL on CloudFront (`enable_waf` in the front-end stack, about $6 a month) would protect only the delivery of the static files, **not the API**, which has its own switch. Without it the front end still has TLS 1.3, security headers, a private bucket and AWS's automatic network-level DDoS protection for CloudFront; a free alarm warns of a request flood.
 
+### Where does the front end keep the sign-in token, and why not in localStorage?
+In memory only (a JavaScript variable). `localStorage` and cookies survive a reload and are readable by any script that runs on the page, so a single injected script could steal a long-lived token. In memory the token is gone when the page closes, and the cost is small: a reload signs the user out, and Cognito's hosted pages sign them straight back in while their session there is alive. The one-time PKCE values that must survive the redirect go in `sessionStorage` and are deleted as soon as they are read.
+
+### Why does the front end not keep a refresh token?
+A refresh token lasts 7 days and can mint new tokens, so storing it in a browser is the riskiest thing a page can do. Without it, a session is the ID token's life (about an hour) and then the user signs in again, which is instant if Cognito's own session is still alive. A hardened approach (a server-side session) would need a backend, which this project does not have.
+
+### How does the page avoid cross-site scripting (XSS)?
+Everything it shows is set with `textContent`, never parsed as HTML, so an order ID or error message returned by the API cannot become script or markup. On top of that the Content Security Policy allows scripts and styles only from the page's own address (no inline script, no `eval`), allows network calls only to itself, the API and the sign-in host, and forbids framing. The page therefore ships its JavaScript and CSS as separate files.
+
+### Why plain JavaScript and no framework?
+No build step, no dependencies to patch, nothing to compile, and the files deployed are exactly the files in the repository. The page is small (a sign-in, two forms and a table). The logic is in small modules with unit tests that run in Node without a browser; a framework would add a build and a dependency tree that this project otherwise avoids.
+
 ## Cost and operations
 
 ### What costs money by default?

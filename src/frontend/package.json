@@ -1,0 +1,6 @@
+{
+  "name": "orders-frontend",
+  "private": true,
+  "type": "module",
+  "description": "Plain JavaScript front end for the orders API: no build step, no dependencies. The package file only marks the .js files as ES modules for the unit tests; it is not deployed."
+}

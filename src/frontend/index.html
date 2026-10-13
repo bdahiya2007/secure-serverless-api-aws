@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Orders</title>
+  <meta name="description" content="Create and look up orders">
+  <meta name="color-scheme" content="light dark">
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <header class="top">
+    <h1>Orders</h1>
+    <p id="who" class="who" hidden></p>
+    <button id="sign-out" type="button" class="secondary" hidden>Sign out</button>
+  </header>
+
+  <main>
+    <p id="fatal" class="notice error" role="alert" hidden></p>
+    <p id="status" class="notice" role="status" aria-live="polite" hidden></p>
+
+    <section id="signed-out" aria-labelledby="signed-out-title" hidden>
+      <h2 id="signed-out-title">Sign in</h2>
+      <p>Orders can be created and read by signed-in users only. You sign in on Cognito's own pages: this page never sees your password.</p>
+      <button id="sign-in" type="button">Sign in</button>
+    </section>
+
+    <div id="signed-in" hidden>
+      <section aria-labelledby="create-title">
+        <h2 id="create-title">Create an order item</h2>
+        <form id="create-form" novalidate autocomplete="off">
+          <div class="field">
+            <label for="create-order-id">Order ID</label>
+            <input id="create-order-id" name="orderId" type="text" required maxlength="128" spellcheck="false" autocapitalize="off">
+          </div>
+          <div class="field">
+            <label for="create-item-id">Item ID</label>
+            <input id="create-item-id" name="itemId" type="text" required maxlength="128" spellcheck="false" autocapitalize="off">
+          </div>
+          <div class="field">
+            <label for="create-quantity">Quantity <span class="hint">(optional, 1 to 10000)</span></label>
+            <input id="create-quantity" name="quantity" type="text" inputmode="numeric">
+          </div>
+          <div class="field">
+            <label for="create-price">Price <span class="hint">(optional, for example 9.99)</span></label>
+            <input id="create-price" name="price" type="text" inputmode="decimal">
+          </div>
+          <button id="create-submit" type="submit">Save item</button>
+        </form>
+        <div id="create-result" class="result" aria-live="polite"></div>
+      </section>
+
+      <section aria-labelledby="lookup-title">
+        <h2 id="lookup-title">Look up an order</h2>
+        <form id="lookup-form" novalidate autocomplete="off">
+          <div class="field">
+            <label for="lookup-order-id">Order ID</label>
+            <input id="lookup-order-id" name="orderId" type="text" required maxlength="128" spellcheck="false" autocapitalize="off">
+          </div>
+          <div class="actions">
+            <button id="read-direct" type="button">Read directly</button>
+            <button id="read-lambda" type="button">Read via Lambda</button>
+            <button id="read-both" type="button" class="secondary">Compare both</button>
+          </div>
+        </form>
+        <p class="hint">The direct read goes from API Gateway straight to the database. The Lambda read goes through a function, which also reports whether the list was cut off at 100 items.</p>
+        <div id="lookup-result" class="result" aria-live="polite"></div>
+      </section>
+    </div>
+  </main>
+
+  <footer>
+    <p>A demonstration front end for a serverless orders API.</p>
+  </footer>
+</body>
+</html>

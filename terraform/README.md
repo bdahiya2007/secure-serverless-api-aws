@@ -402,6 +402,39 @@ The hosted zone is already paid for by the existing site.
 
 See [TESTING.md](../docs/TESTING.md) for the replication, conflict and failover checks.
 
+## Front end app (`src/frontend`)
+
+A small page in **plain JavaScript** (ES modules, no build step, no dependencies) served from the [hosting](#front-end-hosting-separate-stack-applied-locally) above. Signed-in users can create an order item, and look an order up with the direct read, the Lambda read, or both side by side with each one's response time.
+
+| File | Job |
+|---|---|
+| `index.html`, `error.html`, `styles.css` | The page, the 404 page and the stylesheet (light and dark, keyboard and screen-reader friendly, no inline script or style: the Content Security Policy forbids them) |
+| `config.js` | Reads and validates `/config.json` (generated from the deployed stack); names the bad setting, never its value |
+| `pkce.js`, `auth.js` | The sign-in: authorization code flow with PKCE on Cognito's hosted pages; the token exchange; an in-memory session |
+| `api.js` | The calls: the ID token goes in the `Authorization` header (no `Bearer`), every failure becomes a safe message (400, 401, 404, 409, 429, 5xx, network) and a 401 ends the session |
+| `orders.js` | Input checks that mirror the API's rules (the API still validates), table rows, and the direct-versus-Lambda comparison |
+| `view.js`, `app.js` | The thin DOM layer and the wiring |
+
+**How it protects users:**
+- **No password in the page.** The user types it on Cognito's pages; the page gets a one-time code and exchanges it with a **PKCE verifier** it generated, so an intercepted code is useless. The `state` value is checked, and a mismatch stops the sign-in.
+- **Tokens in memory only.** Not in `localStorage` or cookies. Only the one-time PKCE values survive the redirect, in `sessionStorage`, and they are deleted as soon as they are read. A reload signs the user out, and the hosted pages sign straight back in while Cognito's own session is alive. **No refresh token is kept**: the session lasts the ID token's life (about an hour).
+- **No XSS from the API.** Everything shown is set with `textContent`; no HTML string is ever parsed, so an order ID or error message cannot become markup or script. The CSP (no inline script, `connect-src` limited to the API and the sign-in host, no framing) is a second layer.
+- **The code is removed from the address bar** immediately (`history.replaceState`); the page refuses to run if its configuration is for a different address; the token is never put in a URL, a log or a message.
+
+```bash
+# 1. Run it locally against the REAL API and sign-in (http://localhost:8765/ is a registered callback and CORS origin):
+scripts/dev-frontend.py                 # same security headers as production, so CSP problems show in the browser console
+# 2. Create a user to sign in with (users are created by an administrator; there is no sign-up). Choose the password at the silent prompt:
+cd terraform/environments/dev && POOL=$(terraform output -raw user_pool_id) && cd ../../..
+aws cognito-idp admin-create-user --user-pool-id "$POOL" --username you@example.com --user-attributes Name=email,Value=you@example.com Name=email_verified,Value=true --message-action SUPPRESS
+read -rs PW && aws cognito-idp admin-set-user-password --user-pool-id "$POOL" --username you@example.com --password "$PW" --permanent && unset PW
+# 3. Publish it (runs the unit tests first, uploads with cache headers, refreshes CloudFront):
+scripts/deploy-frontend.sh --dry-run    # lists what would change; then without --dry-run
+scripts/demo/frontend-checks.sh         # now all checks run, including the real 200 and 404
+```
+
+Cache headers: HTML revalidates every time (`no-cache`); scripts and styles are cached for 5 minutes; every deploy invalidates the CloudFront cache. Delete the test user afterwards with `aws cognito-idp admin-delete-user` if you do not want it.
+
 ## Front end hosting (separate stack, applied locally)
 
 `terraform/frontend/` hosts the browser app at its own name (for example `orders.example.com`): a **private** S3 bucket served only through CloudFront. It is a **separate Terraform root with its own
@@ -571,7 +604,7 @@ aws cognito-idp admin-delete-user --user-pool-id "$POOL" --username "$EMAIL"
 ## Tests
 
 See the [testing guide](../docs/TESTING.md) for every level, including `./scripts/e2e-test.sh`, which runs the
-API's success and failure cases against the deployed stack and removes its own test data. The three Lambdas have 44 unit tests using Node's built-in runner (no dependencies, Node 22+). The AWS call is
+API's success and failure cases against the deployed stack and removes its own test data. The three Lambdas and the front end have 105 unit tests (62 and 43) using Node's built-in runner (no dependencies, Node 22+). The AWS call is
 injected, so no AWS access is needed. CI runs them on every pull request.
 
 ```bash
