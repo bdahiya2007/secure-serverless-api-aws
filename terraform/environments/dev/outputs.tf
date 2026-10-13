@@ -119,8 +119,9 @@ output "cors_allowed_origins" {
 output "browser_signin" {
   description = "Everything a browser front end needs to sign users in with the hosted pages (authorization code with PKCE): the hosted host and the browser client ID. Not secret; null when the browser client is off. Used to generate the front end's config."
   value = module.orders_user_pool.browser_client_id == null ? null : {
-    host      = module.orders_user_pool.hosted_domain
-    client_id = module.orders_user_pool.browser_client_id
-    scopes    = ["openid", "email"]
+    host          = module.orders_user_pool.hosted_domain
+    client_id     = module.orders_user_pool.browser_client_id
+    scopes        = ["openid", "email"]
+    callback_urls = var.browser_callback_urls
   }
 }

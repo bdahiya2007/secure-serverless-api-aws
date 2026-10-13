@@ -137,10 +137,11 @@ free AWS-published data. Anything billed is off by default and documented:
 ```
 terraform/
 ├── bootstrap/            # applied manually: state bucket, permissions boundary, CI deploy role
+├── frontend/             # the browser front end's hosting (its own state, applied locally): private bucket, CloudFront, certificate, DNS
 ├── environments/dev/     # root configuration for the dev environment
 ├── modules/              # dynamodb-table, lambda-function, rest-api, cognito-user-pool,
 │                         # apigw-dynamodb-role, dax-cluster, waf-rate-limit, cloudwatch-dashboard,
-│                         # api-custom-domain, route53-multi-region
+│                         # api-custom-domain, route53-multi-region, static-site
 └── README.md             # full technical reference and runbook
 src/save-order/           # write Lambda: source and unit tests
 src/get-order/            # read Lambda (Lambda alternative to the direct read): source and unit tests
@@ -386,7 +387,7 @@ What this project does not do, why, and what comes next. When something ships, i
 | Not done | Why |
 |---|---|
 | Update and delete endpoints, and listing orders | The project demonstrates a create path and two read paths. A list needs a design (a `Scan` is unbounded and would expose every order), not just an endpoint. |
-| A browser front end | Not built yet (planned). The API can already be called from a browser origin you list: CORS is an optional setting (`cors_allowed_origins`, off by default). |
+| The browser app itself | The hosting (a private bucket behind CloudFront at its own name, with security headers and a dedicated certificate) is built; the app and its tests are next. The API can be called from a browser origin you list (CORS, `cors_allowed_origins`), and users sign in on Cognito's hosted pages. |
 | More environments (staging, prod) | One `dev` environment keeps cost and complexity low. Multi-region is built as an optional, off-by-default switch (see [Built, but switched off](#built-but-switched-off) and [DISASTER_RECOVERY.md](docs/DISASTER_RECOVERY.md)), but there is no separate production environment, state or approval path. |
 | A custom domain **in the default setup** | The API uses its default `execute-api` URL. A custom domain with a free certificate per region exists only inside the optional multi-region switch, because Route 53 needs an existing hosted zone and the names are not committed. |
 | A federated or production sign-in design | Sign-in uses one Cognito pool and the CLI password flow, for testing. Federation with an identity provider, hosted sign-in (PKCE) and a pool per region are described in [DISASTER_RECOVERY.md](docs/DISASTER_RECOVERY.md#known-gaps-and-what-to-do-before-relying-on-this) but not built. |
