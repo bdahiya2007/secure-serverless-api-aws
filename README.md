@@ -63,15 +63,20 @@ flowchart LR
 
 With multi-region alone there is **one** user pool (us-east-1) that both APIs trust. With Google sign-in on as well, **each region has its own pool and guard and both APIs trust both pools**, so sign-in does not depend on one region (verified live: each pool's token was accepted by both APIs).
 
-**The browser front end** (a separate stack, applied locally): a plain-JavaScript page served from a private bucket through CloudFront at its own name, signing users in on Cognito's hosted pages.
+**The browser front end** (a separate Terraform stack with its own state, applied locally): a plain-JavaScript page served from a private bucket through CloudFront at its own name, signing users in on Cognito's hosted pages.
 
 ```mermaid
 flowchart LR
-  U["Browser"] -->|"HTTPS, TLS 1.3<br/>security headers + CSP"| CF["CloudFront<br/>orders.example.com"]
+  U["Browser"] -->|"DNS lookup"| R53["Route 53<br/>alias record"]
+  R53 -.-> CF
+  U -->|"HTTPS, TLS 1.3<br/>security headers + CSP"| CF["CloudFront<br/>orders.example.com<br/>dedicated ACM certificate"]
+  WAFF["AWS WAF web ACL<br/>(optional, off by default)"] -.-> CF
   CF -->|"origin access control"| S3[("Private S3 bucket<br/>page files + config.json")]
   U -->|"1. sign in<br/>authorization code + PKCE"| H["Cognito hosted pages"]
-  U -->|"2. ID token in memory<br/>calls with CORS"| API["API Gateway<br/>(same API as before)"]
+  U -->|"2. OPTIONS preflight, then<br/>call with ID token in memory"| API["API Gateway<br/>CORS: exact origins only<br/>(same API as before)"]
 ```
+
+On load the page fetches `/config.json` (public settings only: the API address and the sign-in host and client ID) before it signs the user in. The API allows only the exact origins listed in its configuration, and the front end's bucket, CloudFront distribution and certificate live in their own stack (`terraform/frontend`), so the API pipeline never touches them.
 
 **Delivery pipeline:** nothing reaches AWS without a reviewed pull request, and nothing changes AWS without an approval.
 
