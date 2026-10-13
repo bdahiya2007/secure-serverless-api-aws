@@ -361,6 +361,12 @@ Only the page itself for scripts, styles, images and fonts; and for network call
 ### Is the front end protected by a WAF?
 Not by default. A web ACL on CloudFront (`enable_waf` in the front-end stack, about $6 a month) would protect only the delivery of the static files, **not the API**, which has its own switch. Without it the front end still has TLS 1.3, security headers, a private bucket and AWS's automatic network-level DDoS protection for CloudFront; a free alarm warns of a request flood.
 
+### How is the front end tested?
+Three layers. **43 unit tests** run in Node (the logic). **30 mocked browser tests** drive the real page in a real Chromium against a fake sign-in and a fake API (no AWS, no secrets; they run in CI). **One live browser test** signs in on Cognito's real hosted login and uses the real API, creating and removing a temporary user. Every browser test also fails on a Content Security Policy violation or an uncaught error. See [TESTING.md](TESTING.md#12-browser-tests-testse2e).
+
+### How do you know the browser tests would catch a real bug?
+By breaking the page on purpose: removing the sign-in `state` check, inserting API text as HTML, and also saving the token in `localStorage` each made the matching test fail; the files were then restored. A test suite that has never failed has not proven anything.
+
 ### Where does the front end keep the sign-in token, and why not in localStorage?
 In memory only (a JavaScript variable). `localStorage` and cookies survive a reload and are readable by any script that runs on the page, so a single injected script could steal a long-lived token. In memory the token is gone when the page closes, and the cost is small: a reload signs the user out, and Cognito's hosted pages sign them straight back in while their session there is alive. The one-time PKCE values that must survive the redirect go in `sessionStorage` and are deleted as soon as they are read.
 

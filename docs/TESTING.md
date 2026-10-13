@@ -13,6 +13,10 @@ How to test the orders API, from fastest to most complete. Commands run from the
 | [6. WAF](#6-waf-rate-limit-optional-billed) | Yes | minutes | Per-IP rate limiting (**billed**) |
 | [7. Multi-region](#7-multi-region-activeactive-optional-billed) | Yes | 30 minutes | Replication, conflicts, failover across two regions (**billed**) |
 | [8. Google sign-in](#8-sign-in-with-google-optional) | Yes | 20 minutes | Federated sign-in, the allow-list guard, lockout; two regions with [COGNITO_TESTING_RUNBOOK.md](COGNITO_TESTING_RUNBOOK.md) (free) |
+| [9. Hosted sign-in](#9-hosted-sign-in-for-a-browser-front-end-optional) | Yes | 1 minute | The browser client's hosted login, PKCE and tokens, with no browser |
+| [10. Front end hosting](#10-front-end-hosting-terraformfrontend) | Yes | minutes | HTTPS, TLS 1.3, security headers, a private bucket; the existing site unchanged |
+| [11. The app](#11-the-front-end-app-srcfrontend) | No | seconds | The page's logic (43 unit tests) |
+| [12. Browser tests](#12-browser-tests-testse2e) | No for the mocked, Yes for the live | 1 to 2 minutes | The real page in a real Chromium |
 
 The optional DAX and API cache checks are subsections of level 3.
 
@@ -374,6 +378,27 @@ By hand (until the automated browser tests exist), after `scripts/dev-frontend.p
 | An order that does not exist | "No such order." |
 | Wait for the token to expire (about an hour), or sign out | Back to the signed-out view; a call after expiry shows "Your session has ended" |
 | Browser console | **No Content Security Policy violation** and no uncaught error |
+
+## 12. Browser tests (`tests/e2e`)
+
+Playwright drives the real page in a real Chromium. It is a **separate package** (`tests/e2e/package.json`, a lockfile, the version pinned) so the deployed page keeps no dependencies, and it installs with `npm ci --ignore-scripts`.
+
+```bash
+cd tests/e2e
+npm ci --ignore-scripts
+npx playwright install --with-deps chromium    # downloads Chromium; --with-deps also installs system libraries (needs sudo on Linux)
+npm test                                       # the MOCKED tests: a fake sign-in and a fake API, no AWS, no secrets (also run in CI)
+AWS_PROFILE=... npm run test:live              # the LIVE test: real hosted login and real API (needs AWS credentials; creates one temporary user and removes it)
+```
+
+| Suite | What it checks |
+|---|---|
+| **Mocked (30 tests)** | The signed-out view; a configuration for a different address and a broken config are refused; **the whole sign-in round trip** (the code challenge is the SHA-256 of the verifier sent later, the state is echoed, the address is clean, and `localStorage`, `sessionStorage` and cookies stay empty); a wrong state, no pending sign-in, a Cognito error and a failed exchange are each refused with the right message and no token requested; sign-out; a reload signs out; create (invalid input sends nothing; a valid item sends the raw token with no `Bearer`; 409, 429, 500 and API validation messages); read directly, via Lambda (the cut-off warning) and both (which was faster); a missing order, an invalid ID, Enter, and a network failure; a 401 ends the session; an expired token is not sent; **text from the API is never run as markup or script**; the security headers; an injected inline script is blocked (the policy is really enforced); labels, one heading, keyboard, and no sideways scroll on a phone-sized screen |
+| **Live (1 test)** | Cognito's **real** hosted login, the real token endpoint and CORS, the API's CORS answers and the real Content Security Policy together: sign in, create, a duplicate, read both ways, compare, a missing order, sign out |
+
+Every test fails on a **Content Security Policy violation** or an **uncaught error** in the page. The suite was checked by breaking the page on purpose (the sign-in state check removed, API text inserted as HTML, the token also saved to `localStorage`): each break made the matching test fail.
+
+**On a machine without Chromium's system libraries** (a fresh WSL, for example) the browser stops with `error while loading shared libraries`. `npx playwright install-deps chromium` fixes it system-wide (sudo). Without sudo: `apt-get download` the missing packages (for example `libnspr4`, `libnss3`, `libasound2t64`), extract them with `dpkg -x` into a private folder, and set `LD_LIBRARY_PATH` to its `usr/lib/x86_64-linux-gnu`. In CI the job installs them with `--with-deps`.
 
 ## Troubleshooting
 

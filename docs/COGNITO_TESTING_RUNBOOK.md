@@ -244,6 +244,17 @@ answer from the other region (about 30 s for a forced failure; a real failure ta
 
 **B7. Optional guard refusal in the second region.** Repeat A5 with `--region <second-region>`; expect a `deny` in the second region's guard log and no new user in the second pool.
 
+## 7b. Hosted sign-in for the browser client (no Google)
+
+The browser app signs in on Cognito's hosted pages with a username and password, through a separate **browser client** (`cognito_domain_prefix` and `browser_callback_urls`; see the [runbook](../terraform/README.md#hosted-sign-in-for-a-browser-front-end-optional-off-by-default)). Nothing in Parts A and B is needed for it, and it needs no Google account or secret.
+
+```bash
+scripts/demo/hosted-signin-check.py             # no browser: authorize, login form, wrong password, code, PKCE token exchange, the API; cleans up
+cd tests/e2e && AWS_PROFILE=... npm run test:live   # a real browser through the same hosted pages and the real API; creates and removes a temporary user
+```
+
+Expect 12 of 12 checks from the first and a passing live test from the second ([TESTING.md](TESTING.md#12-browser-tests-testse2e)). The same traps apply as in section 10: a callback URL must match **exactly**, and the repository variables must be set before the merge.
+
 ## 8. Switch off, verify and clean up
 
 ```bash

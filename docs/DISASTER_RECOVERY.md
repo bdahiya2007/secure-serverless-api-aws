@@ -63,6 +63,10 @@ cross-region sign-in, replication both ways, a conflict, the domain, and (with `
 script restores the health checks on exit. A real disaster test (breaking a Lambda's permissions in one region and confirming the other serves)
 is the next level and has not been done here. Repeat the test after any change to routing, the APIs or the table, and at least every few months.
 
+## The front end
+
+The front end (a private bucket behind CloudFront) is global: CloudFront serves it from many locations, and a regional failure in `us-east-1` does not take the page down (the bucket itself lives in one region, which CloudFront caches in front of). **But the page calls one API address**, the primary region's API, and signs in through one pool's hosted pages. So in a regional failure the page still loads, and its calls fail with "Could not reach the API" until that region recovers. Pointing it at the multi-region name (`api.<domain>`, with Route 53 routing and health checks) instead of the primary region's address would let it fail over; that is not done, and `config.json` (generated from the dev stack) is the one place to change it. The page's files are versioned in the bucket and in the repository, and the hosting is recreated by `terraform apply` in `terraform/frontend`.
+
 ## Known gaps and what to do before relying on this
 
 1. **Sign-in in one region.** Built behind `enable_federated_signin` (with multi-region on): a pool in each region, both APIs trusting both pools, and

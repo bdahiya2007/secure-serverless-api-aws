@@ -1,0 +1,13 @@
+{
+  "name": "orders-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Browser tests for the front end (Playwright). A separate package so the deployed front end keeps no dependencies at all.",
+  "scripts": {
+    "test": "playwright test --project=mocked",
+    "test:live": "E2E_LIVE=1 playwright test --project=live"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.0"
+  }
+}

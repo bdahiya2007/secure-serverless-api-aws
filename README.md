@@ -63,6 +63,16 @@ flowchart LR
 
 With multi-region alone there is **one** user pool (us-east-1) that both APIs trust. With Google sign-in on as well, **each region has its own pool and guard and both APIs trust both pools**, so sign-in does not depend on one region (verified live: each pool's token was accepted by both APIs).
 
+**The browser front end** (a separate stack, applied locally): a plain-JavaScript page served from a private bucket through CloudFront at its own name, signing users in on Cognito's hosted pages.
+
+```mermaid
+flowchart LR
+  U["Browser"] -->|"HTTPS, TLS 1.3<br/>security headers + CSP"| CF["CloudFront<br/>orders.example.com"]
+  CF -->|"origin access control"| S3[("Private S3 bucket<br/>page files + config.json")]
+  U -->|"1. sign in<br/>authorization code + PKCE"| H["Cognito hosted pages"]
+  U -->|"2. ID token in memory<br/>calls with CORS"| API["API Gateway<br/>(same API as before)"]
+```
+
 **Delivery pipeline:** nothing reaches AWS without a reviewed pull request, and nothing changes AWS without an approval.
 
 ```mermaid
@@ -82,6 +92,7 @@ flowchart LR
 - **Cost awareness:** idle cost is about $0, and every billed feature is off until deliberately enabled.
 - **Delivery discipline:** PR validation without AWS access, OIDC to AWS, manual approval, remote locked state.
 - **Operability:** a CloudWatch dashboard, X-Ray tracing, structured logs with bounded retention.
+- **A browser front end, end to end:** a private bucket behind CloudFront with a strict Content Security Policy and TLS 1.3, sign-in with PKCE and tokens only in memory, unit tests, and **browser tests in a real Chromium**, mocked in CI and live against the real sign-in and API ([the front end](#front-end)).
 - **Resilience and identity (optional):** multi-region active/active with measured replication lag and failover, and sign-in with Google behind an allow-list guard that also locks out removed users on refresh. Both were tested live and written up with their limits ([DISASTER_RECOVERY.md](docs/DISASTER_RECOVERY.md), [COGNITO_TESTING_RUNBOOK.md](docs/COGNITO_TESTING_RUNBOOK.md)).
 
 ## Security design
@@ -89,6 +100,7 @@ flowchart LR
 | Area | What is in place |
 |---|---|
 | **Authentication** | Cognito user pool (Lite tier), admin-created users only, strong password policy, optional TOTP MFA (optionally Cognito's hosted pages with the authorization code flow and PKCE for a browser front end, and Google sign-in behind an allow-list guard; see below). API Gateway rejects requests without a valid ID token before the Lambda runs. |
+| **Front end** | A **private** bucket readable only by its CloudFront distribution (origin access control, TLS-only policy); TLS 1.3 minimum; a Content Security Policy with no inline script or style whose `connect-src` is only the page, the API and the sign-in host, no framing, HSTS, `nosniff` and strict referrer, permissions, COOP and CORP headers. The page signs in with the authorization code flow and **PKCE** (state checked, code removed from the address), keeps the token **in memory only** (no storage, no refresh token), and sets every API-supplied string with `textContent`, so it cannot become markup. It lives in its own stack and state, adds only new resources, and was proven not to change the existing website. Verified by 30 mocked and 1 live browser test, including deliberate breakage that the tests caught. |
 | **Federated sign-in (optional)** | Google through Cognito's hosted pages (authorization code with PKCE, a separate Google-only app client with no secret and no password flow). A guard Lambda on the pre sign-up and pre token generation triggers admits only allow-listed addresses, on every sign-in **and refresh**, fails closed, and never logs an email. Tested: a non-listed Google account is refused with no user created, and a removed address is refused on refresh. **Known limit:** an ID token issued before removal works until it expires (up to 60 minutes). The client secret and the allow-list are supplied at apply time and never committed. |
 | **Input handling** | The API validates the body against a JSON Schema, and the Lambda validates again with an allow-list of fields. Malformed JSON and unknown fields get a 400 that never echoes the input. |
 | **No overwrites** | Writes use a condition expression, so an existing `orderId` + `itemId` returns 409 instead of being replaced. |
@@ -116,6 +128,19 @@ All are off by default and applied locally for a short demo, then removed. Each 
 | `enable_multi_region` | Global table replica, second-region API, Route 53 latency routing with health checks | Replication 0.3 to 1.2 s; a forced failover moved traffic in 31 s (a real one takes about 1.5 to 3 minutes); conflicts resolve to the last writer | [DISASTER_RECOVERY.md](docs/DISASTER_RECOVERY.md) |
 | `enable_federated_signin` | Google sign-in, the guard Lambda, and (with multi-region) a pool per region | Refusal and lockout verified; each pool's token accepted by both APIs; free at this scale | [COGNITO_TESTING_RUNBOOK.md](docs/COGNITO_TESTING_RUNBOOK.md) |
 
+## Front end
+
+A small page, in plain JavaScript with **no build step and no dependencies** (`src/frontend`), served at its own name. A signed-in user can create an order item and read an order directly, via Lambda, or **both side by side with each read's response time**.
+
+| Part | What it is |
+|---|---|
+| **App** | `src/frontend`: sign-in (PKCE), an in-memory session, a typed API client, input checks, and a thin DOM layer. **43 unit tests** run in Node and in CI. |
+| **Hosting** | `terraform/frontend` (its own state, applied locally): a private S3 bucket behind CloudFront, a dedicated certificate and one DNS alias. It only **adds** resources; `scripts/demo/static-site-snapshot.sh` proved the existing website unchanged (distribution, web ACL, bucket policies and every DNS record). |
+| **Browser tests** | `tests/e2e` (Playwright, a separate package so the deployed page keeps no dependencies): **30 mocked tests** (a fake sign-in and API; they run in CI) and a **live test** against the real hosted login and API, with a temporary user it always removes. Breaking the page on purpose (no state check, HTML injection, token in `localStorage`) made the tests fail, as they should. |
+| **Try it** | `scripts/dev-frontend.py` (local, real API, production headers), then `scripts/deploy-frontend.sh` (tests first, cache headers, CloudFront refresh), then `scripts/demo/frontend-checks.sh`. |
+
+Details, the security design and the commands: the [runbook](terraform/README.md#front-end-app-srcfrontend), the [testing guide](docs/TESTING.md) and the [demo results](docs/DEMO_RESULTS.md).
+
 ## Cost awareness
 
 Built and run in a personal AWS account, so cost is a design constraint. Idle cost is effectively zero:
@@ -130,6 +155,7 @@ free AWS-published data. Anything billed is off by default and documented:
 | API Gateway stage cache (300 s TTL) | Billed by the hour even when idle (not free-tier eligible) | Off (`enable_api_cache`); reads can be stale for up to the TTL when on |
 | Sign-in with Google (hosted pages and a guard Lambda) | Free at this scale: Cognito Lite and Lambda free tiers; Google is free | Off (`enable_federated_signin`); anyone could sign in without the guard, so the guard is mandatory |
 | Multi-region active/active (global table replica, second-region API, Route 53 health checks) | Every write billed again in the replica region, plus storage, a second stack and health checks; cents for a short demo | Off (`enable_multi_region`); last-writer-wins on conflicting writes, asynchronous replication |
+| Front end (a private bucket behind CloudFront, its own certificate and DNS alias) | About $0 to a dollar a month: CloudFront inside its always-free allowance, S3 and Route 53 pennies, certificate free; a free alarm warns of a request flood | On, in its own stack; an optional new web ACL for it is **off** (about $6 a month, protects only the static files) |
 | REST API requests | About $3.50 per million | On, pennies at this scale |
 
 ## Repository layout
@@ -146,6 +172,7 @@ terraform/
 src/save-order/           # write Lambda: source and unit tests
 src/get-order/            # read Lambda (Lambda alternative to the direct read): source and unit tests
 src/frontend/             # the browser app (plain JavaScript, no build): sign-in with PKCE, create and look up orders, unit tests
+tests/e2e/                # browser tests (Playwright): mocked (CI) and live (real sign-in and API); a separate package
 src/signin-guard/         # Cognito trigger that allow-lists Google sign-ins (optional): source and unit tests
 scripts/e2e-test.sh       # end-to-end smoke test with automatic cleanup
 scripts/dev-frontend.py     # serves the app locally against the real API and sign-in, with the production security headers
@@ -390,7 +417,7 @@ What this project does not do, why, and what comes next. When something ships, i
 | Not done | Why |
 |---|---|
 | Update and delete endpoints, and listing orders | The project demonstrates a create path and two read paths. A list needs a design (a `Scan` is unbounded and would expose every order), not just an endpoint. |
-| Automated browser tests of the app | The app and its hosting are built and unit-tested (43 tests); end-to-end browser tests are the next step. A manual checklist is in the testing guide. |
+| Browser tests across several browsers and visual checks | The tests run in Chromium only, and there are no screenshot comparisons or automated accessibility audit beyond basic name, label and layout checks. |
 | More environments (staging, prod) | One `dev` environment keeps cost and complexity low. Multi-region is built as an optional, off-by-default switch (see [Built, but switched off](#built-but-switched-off) and [DISASTER_RECOVERY.md](docs/DISASTER_RECOVERY.md)), but there is no separate production environment, state or approval path. |
 | A custom domain **in the default setup** | The API uses its default `execute-api` URL. A custom domain with a free certificate per region exists only inside the optional multi-region switch, because Route 53 needs an existing hosted zone and the names are not committed. |
 | A federated or production sign-in design | Sign-in uses one Cognito pool and the CLI password flow, for testing. Federation with an identity provider, hosted sign-in (PKCE) and a pool per region are described in [DISASTER_RECOVERY.md](docs/DISASTER_RECOVERY.md#known-gaps-and-what-to-do-before-relying-on-this) but not built. |
