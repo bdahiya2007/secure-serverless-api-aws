@@ -358,6 +358,23 @@ scripts/demo/frontend-checks.sh                 # the deployed front end: wait a
 | `config.json` | JSON with the API URL, sign-in host, client ID and redirect URI; no secret-looking keys; not cached |
 | Missing files | A real 404, including for a path like `/.git/config`. **Until `index.html` and `error.html` are uploaded** (the app, a later step) CloudFront has no error page to swap in and passes S3's plain 403 through, so these checks are reported as skipped, not failed |
 
+## 11. The front end app (`src/frontend`)
+
+The page's logic is in small modules with **43 unit tests** (they run with the others: `node --test "src/*/*.test.mjs"`, and in CI): the config checks, PKCE (against the RFC 7636 example), the sign-in URLs, the callback and state handling, the token exchange and its failures, the in-memory session and its expiry, every API status mapped to a safe message, the order input rules, and the read comparison. They need no browser and no AWS.
+
+By hand (until the automated browser tests exist), after `scripts/dev-frontend.py` or a deploy:
+
+| Step | Expect |
+|---|---|
+| Open the page signed out | Only the sign-in button; no forms |
+| Sign in with the test user | Cognito's page, then back to the page with "Signed in as ..." and no `?code=` left in the address |
+| Create an item (order `t-1`, item `i-1`, quantity 2) | "Saved item ..."; saving the same item again shows the "already exists" message |
+| Bad input (an order ID with a space, quantity 0) | Plain-language messages next to nothing being sent |
+| Read directly, via Lambda, and compare | A table with the item and a response time for each; the Lambda read can report that the list was cut off; the comparison says which was faster and warns it is one measurement |
+| An order that does not exist | "No such order." |
+| Wait for the token to expire (about an hour), or sign out | Back to the signed-out view; a call after expiry shows "Your session has ended" |
+| Browser console | **No Content Security Policy violation** and no uncaught error |
+
 ## Troubleshooting
 
 | Symptom | Likely cause and fix |
