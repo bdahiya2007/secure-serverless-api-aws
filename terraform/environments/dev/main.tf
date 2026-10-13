@@ -162,8 +162,10 @@ module "orders_user_pool" {
   mfa_configuration            = "OPTIONAL" # app-based TOTP only (free); SMS MFA is billed
   deletion_protection_enabled  = true
 
-  # Optional sign-in with Google (off by default); see federated-signin.tf.
-  domain_prefix           = local.federated_enabled ? var.federated_domain_prefix : null
+  # Hosted sign-in pages (free), a browser client for the front end, and optional Google sign-in (off by default); see
+  # federated-signin.tf. The hosted domain exists when a prefix is given, with or without Google.
+  domain_prefix           = local.hosted_ui_prefix
+  browser_callback_urls   = var.browser_callback_urls
   google_client_id        = local.federated_enabled ? var.google_client_id : null
   google_client_secret    = local.federated_enabled ? var.google_client_secret : null
   federated_callback_urls = var.federated_callback_urls

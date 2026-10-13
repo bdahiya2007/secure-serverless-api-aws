@@ -143,3 +143,15 @@ variable "cors_allowed_origins" {
   type        = list(string)
   default     = []
 }
+
+variable "cognito_domain_prefix" {
+  description = "Prefix of Cognito's hosted sign-in domain (<prefix>.auth.<region>.amazoncognito.com), for a browser front end that signs users in with a username and password on the hosted pages (free on the Lite plan). Empty (the default) leaves the hosted UI off. Lower-case letters, numbers and hyphens; unique per region across all AWS accounts; may not contain aws, amazon or cognito. The pipeline reads the repository variable COGNITO_DOMAIN_PREFIX; it is not committed. If enable_federated_signin is also on, federated_domain_prefix must be the same value."
+  type        = string
+  default     = ""
+}
+
+variable "browser_callback_urls" {
+  description = "Exact URLs the hosted sign-in pages may redirect back to, for the browser front end, for example [\"https://orders.example.com/\", \"http://localhost:8765/\"]. Needs cognito_domain_prefix. Empty (the default) creates no browser client. The pipeline reads the repository variable BROWSER_CALLBACK_URLS (a JSON list); it is not committed."
+  type        = list(string)
+  default     = []
+}

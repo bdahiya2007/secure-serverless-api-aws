@@ -88,7 +88,7 @@ flowchart LR
 
 | Area | What is in place |
 |---|---|
-| **Authentication** | Cognito user pool (Lite tier), admin-created users only, strong password policy, optional TOTP MFA (optionally Google sign-in behind an allow-list guard; see below). API Gateway rejects requests without a valid ID token before the Lambda runs. |
+| **Authentication** | Cognito user pool (Lite tier), admin-created users only, strong password policy, optional TOTP MFA (optionally Cognito's hosted pages with the authorization code flow and PKCE for a browser front end, and Google sign-in behind an allow-list guard; see below). API Gateway rejects requests without a valid ID token before the Lambda runs. |
 | **Federated sign-in (optional)** | Google through Cognito's hosted pages (authorization code with PKCE, a separate Google-only app client with no secret and no password flow). A guard Lambda on the pre sign-up and pre token generation triggers admits only allow-listed addresses, on every sign-in **and refresh**, fails closed, and never logs an email. Tested: a non-listed Google account is refused with no user created, and a removed address is refused on refresh. **Known limit:** an ID token issued before removal works until it expires (up to 60 minutes). The client secret and the allow-list are supplied at apply time and never committed. |
 | **Input handling** | The API validates the body against a JSON Schema, and the Lambda validates again with an allow-list of fields. Malformed JSON and unknown fields get a 400 that never echoes the input. |
 | **No overwrites** | Writes use a condition expression, so an existing `orderId` + `itemId` returns 409 instead of being replaced. |

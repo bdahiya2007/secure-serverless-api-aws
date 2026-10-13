@@ -319,6 +319,27 @@ Rules that avoid the common mistakes: a callback link (`http://localhost:8765/ca
 reload it. Every sign-in needs a **fresh run** of the script and a **private window** (a normal window reuses your existing Google session and may sign in as an address that is not
 on the list). Tokens are credentials: the scripts never print them and they are never in the repository.
 
+## 9. Hosted sign-in for a browser front end (optional)
+
+Needs the hosted pages and the browser client applied ([runbook](../terraform/README.md#hosted-sign-in-for-a-browser-front-end-optional-off-by-default)). **No browser and no Google account are needed:**
+
+```bash
+scripts/demo/hosted-signin-check.py      # creates a temporary password user, signs in on the hosted pages, checks the tokens and the API, deletes the user
+```
+
+| Check | Expect |
+|---|---|
+| `/oauth2/authorize` | redirects to the hosted login page |
+| The login page | has the sign-in form with a CSRF token |
+| A wrong password | no authorization code is issued |
+| The right password | redirects to the registered URL with a `code` and the same `state` |
+| The token endpoint (PKCE) | an ID token and a refresh token; the issuer is the pool, the audience is the browser client, the email is present and verified |
+| A second use of the same code | refused (a code works once) |
+| The API with the ID token / without a token | 404 (accepted, order not found) / 401 |
+| An unregistered redirect URL | is not redirected to |
+
+If the hosted-pages markup ever changes, the script's form parsing is the first thing to adjust. The script never prints a token.
+
 ## Troubleshooting
 
 | Symptom | Likely cause and fix |

@@ -44,6 +44,13 @@ For an immediate cut-off also run `aws cognito-idp admin-user-global-sign-out` a
 With multi-region and Google sign-in both on, each region has its own pool and **both APIs trust both pools**. Verified: all four combinations (each pool's token on each API) were accepted. With multi-region alone there is one pool in us-east-1 that both APIs trust.
 Two separate pools do not share users, which is why Google (an external identity provider) is used: nothing has to be copied. Cognito's own multi-Region replication would share them; see the next question.
 
+### Does a browser app need Google to sign in?
+No. With `cognito_domain_prefix` and `browser_callback_urls` set, Cognito's **hosted sign-in pages** sign users in with a username and password, using the **authorization code flow with PKCE**; no Google account, no client secret, and no cost on the Lite plan. Users are still created by an administrator (no self sign-up).
+Google stays an optional extra with its own client. See [runbook](../terraform/README.md#hosted-sign-in-for-a-browser-front-end-optional-off-by-default).
+
+### Why the authorization code flow with PKCE, and not the implicit flow or a password form in the app?
+The app never sees the password: the user types it on Cognito's pages. The code is single-use and bound to a secret the app generated (the PKCE verifier), so a code intercepted in the redirect is useless without it. The implicit flow (tokens in the redirect URL) is deprecated and is not enabled on the browser client.
+
 ### Does Cognito have built-in multi-Region replication, and why is it not used here?
 Yes: [multi-Region replication (MRR)](https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-multi-region.html) creates a **replica user pool** in a second region that shares the primary's user directory and user pool ID, and can fail over managed login, federation and
 direct API calls using a Route 53 health check on the pool's domain. It was **not used** because of its requirements and limits (from the AWS page):
