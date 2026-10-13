@@ -344,6 +344,23 @@ For the Route 53 layer, yes: an existing public hosted zone and a name inside it
 
 ---
 
+## Front end hosting
+
+### Why is the front end a separate Terraform stack?
+The pipeline applies the dev stack on every merge with its optional switches off, and its deploy role has no CloudFront, certificate or DNS permissions (by design). A separate root with its **own state** (`frontend/terraform.tfstate`, outside the `dev/` prefix the deploy role can touch) is applied locally and left on: a merge can never remove it, and a front-end change cannot disturb the API stack. It reads the dev stack's public outputs to build `config.json`.
+
+### Can adding the front end affect the existing static website?
+It is built not to: the module only adds new resources (a new bucket, distribution, dedicated certificate, response-headers policy, alarm and two DNS records) and never references the existing site's distribution, web ACL, buckets, certificate or records; the DNS records cannot overwrite an existing name. `scripts/demo/static-site-snapshot.sh save` and `compare` prove it by fingerprinting the existing site before and after (distribution configuration, web ACL, bucket policies, and every DNS record).
+
+### Why a dedicated certificate and not the existing wildcard?
+It keeps the two sites independent: a shared certificate would stop either project from deleting or replacing it while the other uses it. A certificate for one name is free, and costs one extra validation record.
+
+### What does the Content Security Policy allow?
+Only the page itself for scripts, styles, images and fonts; and for network calls only itself, the API and the Cognito hosted domain (so a script that is somehow injected cannot send data elsewhere). There is no inline script or style, no framing, and no `unsafe-inline` or `unsafe-eval`. The page therefore ships its JavaScript and CSS as separate files.
+
+### Is the front end protected by a WAF?
+Not by default. A web ACL on CloudFront (`enable_waf` in the front-end stack, about $6 a month) would protect only the delivery of the static files, **not the API**, which has its own switch. Without it the front end still has TLS 1.3, security headers, a private bucket and AWS's automatic network-level DDoS protection for CloudFront; a free alarm warns of a request flood.
+
 ## Cost and operations
 
 ### What costs money by default?

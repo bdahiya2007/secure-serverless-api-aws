@@ -340,6 +340,24 @@ scripts/demo/hosted-signin-check.py      # creates a temporary password user, si
 
 If the hosted-pages markup ever changes, the script's form parsing is the first thing to adjust. The script never prints a token.
 
+## 10. Front end hosting (terraform/frontend)
+
+See the [runbook](../terraform/README.md#front-end-hosting-separate-stack-applied-locally). Two read-only scripts:
+
+```bash
+scripts/demo/static-site-snapshot.sh save       # BEFORE applying: fingerprints of the existing website (config, web ACL, bucket policies, DNS records)
+scripts/demo/static-site-snapshot.sh compare    # AFTER: must report every fingerprint unchanged, and list only NEW DNS records
+scripts/demo/frontend-checks.sh                 # the deployed front end: wait a few minutes after the apply
+```
+
+| Check | Expect |
+|---|---|
+| HTTPS, plain HTTP, TLS | 200 (or 404 before the page is uploaded); HTTP redirects to HTTPS (301); TLS 1.3 works and TLS 1.2 is refused; the certificate is for the exact name; HTTP/3 advertised |
+| Security headers | HSTS (2 years), `nosniff`, frame DENY, referrer policy, permissions policy, COOP and CORP same-origin, and a CSP with no `unsafe-inline` or `unsafe-eval` whose `connect-src` is only itself, the API and the Cognito host |
+| The bucket | Its own URL is not readable (403): only CloudFront can read it |
+| `config.json` | JSON with the API URL, sign-in host, client ID and redirect URI; no secret-looking keys; not cached |
+| Missing files | A real 404, including for a path like `/.git/config` |
+
 ## Troubleshooting
 
 | Symptom | Likely cause and fix |

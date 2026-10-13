@@ -13,6 +13,7 @@ Free-tier friendly: anything that costs money is off by default and documented b
 terraform/
 ├── bootstrap/                     # applied MANUALLY: state bucket, permissions boundary, CI deploy role
 ├── environments/dev/              # root config: provider, tags, Orders table, save-order function, orders API
+├── frontend/                      # root config for the browser front end's hosting (its OWN state; applied locally): private bucket + CloudFront + certificate + DNS
 └── modules/
     ├── dynamodb-table/            # reusable, validated DynamoDB table module
     ├── lambda-function/           # Lambda + least-privilege IAM role + log group (+ boundary, X-Ray)
@@ -22,6 +23,7 @@ terraform/
     ├── dax-cluster/               # optional DAX cluster, its role, security groups and a Logs endpoint (billed; off by default)
     ├── waf-rate-limit/            # optional WAF per-IP rate limit (billed; off by default)
     ├── api-custom-domain/         # optional regional custom domain: ACM certificate, DNS validation, mapping (multi-region)
+    ├── static-site/               # private S3 bucket behind CloudFront (OAC, TLS 1.3, security headers, dedicated certificate, DNS alias, optional new web ACL)
     ├── route53-multi-region/      # optional Route 53 latency records and health checks (billed; off by default)
     └── cloudwatch-dashboard/      # API Gateway Count/4XXError, Lambda Invocations/Errors
 src/save-order/                    # write Lambda: Node.js code and unit tests
@@ -399,6 +401,46 @@ The hosted zone is already paid for by the existing site.
 - **Delete handling:** deleting the replica needs the switch off; the global table keeps working in the remaining region.
 
 See [TESTING.md](../docs/TESTING.md) for the replication, conflict and failover checks.
+
+## Front end hosting (separate stack, applied locally)
+
+`terraform/frontend/` hosts the browser app at its own name (for example `orders.example.com`): a **private** S3 bucket served only through CloudFront. It is a **separate Terraform root with its own
+state** (`frontend/terraform.tfstate`), so the pipeline never sees it (the deploy role can only touch the `dev/` prefix) and a merge cannot remove it. It only **adds** resources; it never references or edits the existing
+static website's distribution, web ACL, buckets, certificate or DNS records.
+
+```
+viewer --HTTPS (TLS 1.3, HTTP/3)--> CloudFront --signed request (OAC)--> private S3 bucket (versioned, encrypted, TLS-only)
+                                       |                                  config.json (public settings, managed here)
+                                       +-- security headers (CSP, HSTS, no-sniff, frame DENY, referrer, permissions, COOP, CORP)
+```
+
+| Piece | Detail |
+|---|---|
+| Bucket | All four Block Public Access settings, versioning, SSE-S3, owner enforced, old versions expire after 90 days. The policy lets **only this distribution** read (`AWS:SourceArn`) and denies non-TLS. |
+| CloudFront | Origin access control (not the legacy identity), redirect to HTTPS, GET and HEAD only, compressed, `Managed-CachingOptimized`, HTTP/2 and 3, IPv6, price class 100, minimum **TLS 1.3**, a missing file returns a real 404 (`/error.html`). |
+| Security headers | A response-headers policy: **CSP** (`default-src 'none'`; scripts, styles, images and fonts only from itself; `connect-src` only itself, **the API and the Cognito hosted domain**; `frame-ancestors 'none'`; no inline script or style, so the page must ship its JavaScript and CSS as files), HSTS for 2 years, `nosniff`, frame DENY, a strict referrer policy, a restrictive `Permissions-Policy`, and same-origin COOP and CORP. |
+| Certificate | A **dedicated** ACM certificate for exactly this name (free), DNS-validated in your existing zone (one extra validation record); nothing shared with the other site's certificate. |
+| DNS | Only the `A` and `AAAA` alias records for the new name (and the validation record). `allow_overwrite = false`: if the name already has a record, the apply fails instead of replacing it. |
+| `config.json` | The page's public settings (API URL, Cognito hosted host, browser client ID, redirect URI), generated from the dev stack's outputs so it always matches; `no-cache`. **No secrets**: anyone can read it. The page's own files are uploaded by a script, not by Terraform. |
+| Web ACL | **Off by default** (`enable_waf`): a NEW per-IP rate rule that bills about $6 a month and protects only the static files, not the API. |
+| Alarm | A free CloudWatch alarm when the distribution serves more than 10,000 requests in an hour (an early warning of a traffic flood; no action attached). |
+
+**Cost:** about $0 to a dollar a month: CloudFront inside its always-free allowance (shared across the account), S3 pennies, Route 53 pennies, the certificate free, no web ACL. A flood is the only way to a bigger bill (pay-as-you-go has no overage cap); the alarm and the $5 budget warn, and a CloudFront flat-rate plan (no overage charges, WAF included) is an option to evaluate later.
+
+**Stops with a clear message** (preconditions) if: the name is outside the zone, is the zone itself or `www`; the dev stack has no browser sign-in; the API does not list this origin in `CORS_ALLOWED_ORIGINS`; or the browser client does not list `https://<name>/` in `BROWSER_CALLBACK_URLS`.
+
+```bash
+cd terraform/frontend
+cp terraform.tfvars.example terraform.tfvars                      # then edit: your name, your zone, the state bucket (git-ignored)
+terraform init -backend-config="bucket=$(terraform -chdir=../bootstrap output -raw state_bucket)"
+cd ../.. && scripts/demo/static-site-snapshot.sh save            # BEFORE: read-only fingerprints of the existing website
+cd terraform/frontend && terraform plan                          # must show only additions (18), no change and no destroy
+terraform apply                                                  # a few minutes (certificate validation, distribution deployment)
+cd ../.. && scripts/demo/static-site-snapshot.sh compare         # AFTER: must say NOTHING about the existing site changed
+scripts/demo/frontend-checks.sh                                  # HTTPS, TLS 1.3, headers, private bucket, config.json, 404s
+```
+
+Remove it with `terraform destroy` in `terraform/frontend` (the bucket must be empty; it is versioned, so delete all versions first). The DNS records and the certificate go with it.
 
 ## Hosted sign-in for a browser front end (optional, off by default)
 

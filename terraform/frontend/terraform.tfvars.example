@@ -1,0 +1,5 @@
+# Copy to terraform.tfvars (git-ignored) and fill in YOUR values. None of these is committed.
+domain_name       = "orders.example.com"   # a new name inside your zone; it must not already have a record
+route53_zone_name = "example.com"          # your existing public hosted zone
+state_bucket      = "your-terraform-state-bucket"   # terraform -chdir=../bootstrap output -raw state_bucket
+# enable_waf     = false   # a billed web ACL (about $6/month); see the runbook before turning it on
