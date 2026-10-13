@@ -18,7 +18,7 @@ Only content that is committed (or about to be) is scanned. Git-ignored local fi
 | Credentials | AWS access keys and secret keys, private key blocks, GitHub and Slack tokens, JWTs, a password or token assigned a literal value, **Google OAuth client secrets** (`GOCSPX-...`), **Google OAuth client IDs** (`<number>-<id>.apps.googleusercontent.com`), Google API keys (`AIza...`) and Google access or refresh tokens (`ya29.`, `1//`) |
 | AWS identifiers | An account ID inside an ARN, a 12-digit account ID in a resource name, deployed API, SSO and CloudFront hostnames, Cognito user pool IDs, **Cognito hosted sign-in domains** (`<prefix>.auth.<region>.amazoncognito.com` with a real prefix) |
 | Personal data | Email addresses (except `example.com`/`.org`/`.net` and `users.noreply.github.com`), personal file paths such as `/home/<user>/`, private IP addresses |
-| Files that must never be committed | `*.tfstate`, `*.tfvars`, saved plans (`tfplan`, `*.tfplan`), `.env`, `*.pem`, `*.key`, `*credentials*`, `.terraform/`, `.aws/`, `.ssh/` (`.terraform.lock.hcl` is allowed) |
+| Files that must never be committed (a template ending in `.example`, such as `terraform.tfvars.example`, with placeholders only, is fine) | `*.tfstate`, `*.tfvars`, saved plans (`tfplan`, `*.tfplan`), `.env`, `*.pem`, `*.key`, `*credentials*`, `.terraform/`, `.aws/`, `.ssh/` (`.terraform.lock.hcl` is allowed) |
 | Your own block list | Exact values you list, such as your account ID (see below) |
 
 Use placeholders in docs and code: `ACCOUNT_ID`, `you@example.com`.

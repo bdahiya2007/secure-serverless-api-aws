@@ -76,7 +76,8 @@ jobs:
 
       - name: Fail if state or variable files are committed
         run: |
-          if git ls-files | grep -E '\.(tfstate|tfvars)(\.|$)|\.tfstate\.backup$'; then
+          # Files ending in .example are templates with placeholder values (for example terraform.tfvars.example), not real variable files.
+          if git ls-files | grep -vE '\.example$' | grep -E '\.(tfstate|tfvars)(\.|$)|\.tfstate\.backup$'; then
             echo "State or tfvars file is tracked by git" >&2
             exit 1
           fi
