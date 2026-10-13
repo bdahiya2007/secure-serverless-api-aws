@@ -361,6 +361,12 @@ resource "aws_api_gateway_gateway_response" "cors" {
     "gatewayresponse.header.Access-Control-Allow-Headers" = "'Authorization,Content-Type'"
     "gatewayresponse.header.Vary"                         = "'Origin'"
   }
+
+  # API Gateway's own default error body. It is set explicitly because AWS fills it in; leaving it out made every plan want to
+  # clear it (permanent drift) and applying that could have blanked the JSON error bodies.
+  response_templates = {
+    "application/json" = "{\"message\":$context.error.messageString}"
+  }
 }
 
 resource "aws_api_gateway_deployment" "this" {

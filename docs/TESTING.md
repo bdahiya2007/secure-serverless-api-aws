@@ -218,7 +218,7 @@ Turn the cache off again afterwards (`terraform apply` without the variable) and
 Only relevant when `cors_allowed_origins` is set (see the [runbook](../terraform/README.md#cors-for-a-browser-front-end-optional-off-by-default)). Unit tests for the Lambdas' CORS handling run with the others. Against the deployed API:
 
 ```bash
-scripts/demo/cors-checks.sh            # checks: preflight on each route, a disallowed origin, a 401 from API Gateway, and real calls
+scripts/demo/cors-checks.sh            # wait about a minute after a deploy first (API Gateway nodes update gradually). Checks: preflight on each route, a disallowed origin, a 401 from API Gateway, and real calls
 # by hand: a preflight from an allowed origin must return Access-Control-Allow-Origin equal to that origin
 curl -si -X OPTIONS "$BASE/orders" -H "Origin: https://orders.example.com" -H "Access-Control-Request-Method: POST" \
   -H "Access-Control-Request-Headers: authorization,content-type" | grep -i '^access-control\|^vary\|^HTTP'
