@@ -139,7 +139,7 @@ A small page, in plain JavaScript with **no build step and no dependencies** (`s
 | **Browser tests** | `tests/e2e` (Playwright, a separate package so the deployed page keeps no dependencies): **30 mocked tests** (a fake sign-in and API; they run in CI) and a **live test** against the real hosted login and API (run against the local preview and against the **published site**), with a temporary user it always removes. Breaking the page on purpose (no state check, HTML injection, token in `localStorage`) made the tests fail, as they should. |
 | **Try it** | `scripts/dev-frontend.py` (local, real API, production headers), then `scripts/deploy-frontend.sh` (tests first, cache headers, CloudFront refresh), then `scripts/demo/frontend-checks.sh`. |
 
-Details, the security design and the commands: the [runbook](terraform/README.md#front-end-app-srcfrontend), the [testing guide](docs/TESTING.md) and the [demo results](docs/DEMO_RESULTS.md).
+To try it yourself, [create a user and sign in](terraform/README.md#try-the-published-site-as-a-real-user). Details, the security design and the commands: the [runbook](terraform/README.md#front-end-app-srcfrontend), the [testing guide](docs/TESTING.md) and the [demo results](docs/DEMO_RESULTS.md).
 
 ## Cost awareness
 

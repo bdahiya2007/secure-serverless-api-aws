@@ -437,6 +437,35 @@ cd tests/e2e && npm ci --ignore-scripts && E2E_LIVE=1 E2E_BASE_URL=https://order
 
 Cache headers: HTML revalidates every time (`no-cache`); scripts and styles are cached for 5 minutes; every deploy invalidates the CloudFront cache. Delete the test user afterwards with `aws cognito-idp admin-delete-user` if you do not want it.
 
+### Try the published site as a real user
+
+Users are created by an administrator (there is no sign-up). Run this from `terraform/environments/dev` after `aws sso login`; the password is read silently so it never lands in a file, the shell history or a chat.
+
+```bash
+export AWS_PROFILE=<your-profile>
+POOL=$(terraform output -raw user_pool_id)
+echo "pool: ${POOL:-EMPTY}"               # must print a pool ID; if EMPTY, you are in the wrong folder or signed out
+EMAIL="you@example.com"                   # an address you control
+
+# 1. Create the user (no invitation email is sent)
+aws cognito-idp admin-create-user --user-pool-id "$POOL" --username "$EMAIL" \
+  --user-attributes Name=email,Value="$EMAIL" Name=email_verified,Value=true --message-action SUPPRESS
+
+# 2. Set a permanent password (skips the forced change on first login)
+read -rs -p "Password: " PW; echo
+aws cognito-idp admin-set-user-password --user-pool-id "$POOL" --username "$EMAIL" --password "$PW" --permanent
+unset PW
+```
+
+Then, in a browser at the site's address (for example `https://orders.example.com`):
+
+1. **Sign in** on Cognito's hosted page and come back signed in.
+2. **Create an order**, then create the same ID again: a duplicate (409) message.
+3. **Look it up** with the direct read, the Lambda read and the comparison; look up an ID that does not exist (404).
+4. **Sign out**, reload and confirm you are signed out (tokens are kept in memory only). In the browser's developer tools, storage should hold no tokens and the console no policy (CSP) errors.
+
+Clean up when done: `aws cognito-idp admin-delete-user --user-pool-id "$POOL" --username "$EMAIL"`. Test orders stay in the table until deleted. **Any signed-in user can read any order** (orders are not yet tied to the user who created them), so do not put sensitive data in test orders.
+
 ## Front end hosting (separate stack, applied locally)
 
 `terraform/frontend/` hosts the browser app at its own name (for example `orders.example.com`): a **private** S3 bucket served only through CloudFront. It is a **separate Terraform root with its own
