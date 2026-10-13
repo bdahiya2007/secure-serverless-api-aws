@@ -199,6 +199,28 @@ and a null Terraform output made `federated-checks.sh` stop early with multi-reg
 **Cost.** Google sign-in alone: nothing (Cognito Lite and Lambda free tiers; Google is free). The two-region part had the multi-region stack on for about 30 minutes: a few cents (an earlier version of this page said
 about $0.07 an hour, which is the DAX, cache and WAF figure and was wrong for this stack: its idle cost is mostly the two health checks, roughly $3 a month, plus request and replicated-write charges; unverified); the bill was not read.
 
+## Fourth check: hosted sign-in for the browser client, 2026-10-13
+
+Cognito's hosted sign-in pages and a public browser client (authorization code flow with PKCE, username and password, exact callback URLs), applied **by the pipeline** with repository variables for the prefix and the callback URLs. Design: the [runbook](../terraform/README.md#hosted-sign-in-for-a-browser-front-end-optional-off-by-default); the check is `scripts/demo/hosted-signin-check.py` (no browser).
+
+| Check | Result |
+|---|---|
+| `/oauth2/authorize` | Redirects to the hosted login page |
+| Login page | Has the sign-in form and a CSRF token |
+| Wrong password | No authorization code issued |
+| Right password | Redirected to the registered URL with a code, and the same `state` |
+| Token endpoint (PKCE) | ID and refresh tokens; issuer is the pool, audience is the browser client, email present and verified |
+| Same code a second time | Refused (HTTP 400) |
+| API with the ID token / without | 404 (accepted) / 401 |
+| Unregistered redirect URL | Not redirected to |
+
+**12 of 12 passed** (a temporary user, deleted afterwards).
+
+**What went wrong on the way, all fixed**
+- **The first deploy failed** with `AccessDeniedException` on `DescribeUserPoolDomain`: the deploy role could not be scoped for that call (it takes a domain name, not a pool), so it needs `*`. The apply had created the domain but could not wait for it, leaving it **tainted** in the state. Fix: add the read-only permission in the bootstrap (applied by hand), untaint the domain, re-run the deploy. It was missed because the earlier Google demo applied the same domain locally with broader permissions.
+- **The first run of the check failed to parse the login form**, because the page writes `action` before `name` and the script assumed the opposite. The script now reads attributes in any order.
+- The repository variables were set before the merge this time, so the pipeline applied the sign-in on the first successful run.
+
 ## Shutdown (End) verified
 
 After the final `terraform apply` with no variables (about 20:10 UTC), a check found: `waf_enabled`, `api_cache_enabled` and `dax_enabled`
