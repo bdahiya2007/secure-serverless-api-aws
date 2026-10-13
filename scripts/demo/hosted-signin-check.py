@@ -73,8 +73,10 @@ def main():
         check("authorize redirects to the hosted login page", status in (301, 302) and "/login" in loc, f"HTTP {status}")
         login_url = urllib.parse.urljoin(f"https://{host}/", loc)
         status, _, page = open_url(opener, login_url)
-        form = re.search(r'<form[^>]*name="cognitoSignInForm"[^>]*action="([^"]+)"', page)
-        csrf = re.search(r'name="_csrf"\s+value="([^"]+)"', page)
+        # Attribute order varies (the live page writes action before name), so read the form tag first, then its action.
+        tag = re.search(r'<form\b[^>]*\bname="cognitoSignInForm"[^>]*>', page)
+        form = re.search(r'\baction="([^"]+)"', tag.group(0)) if tag else None
+        csrf = re.search(r'<input\b[^>]*\bname="_csrf"[^>]*\bvalue="([^"]+)"', page)
         check("login page has the sign-in form with a CSRF token", status == 200 and bool(form) and bool(csrf), f"HTTP {status}")
         if not (form and csrf):
             return 1
