@@ -431,6 +431,8 @@ read -rs PW && aws cognito-idp admin-set-user-password --user-pool-id "$POOL" --
 # 3. Publish it (runs the unit tests first, uploads with cache headers, refreshes CloudFront):
 scripts/deploy-frontend.sh --dry-run    # lists what would change; then without --dry-run
 scripts/demo/frontend-checks.sh         # now all checks run, including the real 200 and 404
+# 4. Optional: the live browser test against the published site (real sign-in and API; creates and removes a temporary user):
+cd tests/e2e && npm ci --ignore-scripts && E2E_LIVE=1 E2E_BASE_URL=https://orders.example.com AWS_PROFILE=... npx playwright test --project=live
 ```
 
 Cache headers: HTML revalidates every time (`no-cache`); scripts and styles are cached for 5 minutes; every deploy invalidates the CloudFront cache. Delete the test user afterwards with `aws cognito-idp admin-delete-user` if you do not want it.

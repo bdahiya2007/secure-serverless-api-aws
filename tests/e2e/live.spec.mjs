@@ -1,5 +1,7 @@
 // The front end against the REAL sign-in and API, in a real browser. Run on demand only:
 //   AWS_PROFILE=... npm run test:live      (E2E_LIVE=1; the config starts scripts/dev-frontend.py on http://localhost:8765)
+//   E2E_BASE_URL=https://orders.example.com AWS_PROFILE=... npm run test:live     the PUBLISHED site instead (no local server; the
+//   address must be a registered callback URL, as the published site's own address is)
 // It creates ONE temporary Cognito user (password chosen at random, never printed) and a few order rows, and ALWAYS removes them.
 // It proves what the mocked tests cannot: Cognito's real hosted login, the real token endpoint and CORS, the API's CORS answers
 // and the real Content Security Policy working together in a browser.
@@ -11,6 +13,9 @@ import { expect, test } from "@playwright/test";
 
 const DEV = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "terraform", "environments", "dev");
 const sh = (cmd, args) => execFileSync(cmd, args, { encoding: "utf8", cwd: DEV }).trim();
+
+// The address the page is served from: the local dev server by default, or the published site.
+const ORIGIN = new URL(process.env.E2E_BASE_URL || "http://localhost:8765").origin;
 
 const run = randomBytes(3).toString("hex");
 const email = `live-${run}@example.com`;
@@ -58,12 +63,12 @@ test("real sign-in, create, read both ways, compare, sign out: no policy violati
   await page.locator('input[name="signInSubmitButton"]:visible').click();
 
   // back on the page, signed in, with a clean address and no stored token
-  await page.waitForURL("http://localhost:8765/");
+  await page.waitForURL(`${ORIGIN}/`);
   await expect(page.locator("#who")).toContainText(`Signed in as ${email}`);
   expect(new URL(page.url()).search).toBe("");
   expect(await page.evaluate(() => localStorage.length)).toBe(0);
   expect(await page.evaluate(() => sessionStorage.length)).toBe(0);
-  expect((await context.cookies("http://localhost:8765/")).length).toBe(0);
+  expect((await context.cookies(`${ORIGIN}/`)).length).toBe(0);
 
   // create an item, then the same item again
   await page.getByLabel("Order ID").first().fill(orderId);
@@ -97,7 +102,7 @@ test("real sign-in, create, read both ways, compare, sign out: no policy violati
 
   // sign out through the hosted logout, and come back signed out
   await page.click("#sign-out");
-  await page.waitForURL("http://localhost:8765/");
+  await page.waitForURL(`${ORIGIN}/`);
   await expect(page.locator("#signed-out")).toBeVisible();
   await expect(page.locator("#who")).toBeHidden();
 
