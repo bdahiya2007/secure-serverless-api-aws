@@ -221,6 +221,36 @@ Cognito's hosted sign-in pages and a public browser client (authorization code f
 - **The first run of the check failed to parse the login form**, because the page writes `action` before `name` and the script assumed the opposite. The script now reads attributes in any order.
 - The repository variables were set before the merge this time, so the pipeline applied the sign-in on the first successful run.
 
+## Fifth check: the front end hosting, the app and the browser tests, 2026-10-13
+
+The front end ([runbook](../terraform/README.md#front-end-hosting-separate-stack-applied-locally)): a private bucket behind CloudFront in its own Terraform stack, applied locally, then a plain-JavaScript app and browser tests. The name, zone, certificate and IDs are the owner's and are not recorded here.
+
+**Hosting, applied locally**
+
+| Check | Result |
+|---|---|
+| Plan | 18 to add, 0 to change, 0 to destroy; every resource new |
+| Apply | In two runs (see below); afterwards a plan shows **no changes** and the distribution is Deployed |
+| **The existing static website** | **Unchanged**: its distribution configuration, web ACL, both bucket policies and all 7 DNS records identical before and after; exactly 3 DNS records added (the certificate validation and the A and AAAA aliases); the apex and `www` still answered 200 |
+| `frontend-checks.sh` (empty bucket) | 20 passed, 0 failed, 3 skipped (the page and its error page were not uploaded yet): TLS 1.3 works and TLS 1.2 is refused, plain HTTP redirects to HTTPS, the certificate is for the exact name, HTTP/3 is advertised, every security header and the CSP are present (even on error responses), the bucket URL is not readable, `config.json` is public, secret-free and not cached |
+
+**What went wrong, all fixed:** the first apply stopped with `Provider produced inconsistent final plan` for the cache policy ID, because the module's `depends_on` pushed that lookup to apply time (13 of 18 resources were created; re-running finished the other 5; the dependency was removed). CI had also failed on a guard that matched `terraform.tfvars.example` (a placeholder template), now exempted. The checks script first counted an empty bucket as failures, so it now skips the content checks until the page is uploaded.
+
+**The app and its browser tests**
+
+| Check | Result |
+|---|---|
+| Unit tests | 105 pass (62 existing + 43 for the page): PKCE against the RFC 7636 example, the sign-in URLs, callback and state, the token exchange, session expiry, every API status, input rules |
+| Cognito's token endpoint | Answers browser preflights and real calls with CORS headers for the front end's origins (checked before building, because the design depends on it) |
+| **Mocked browser tests** (a real Chromium, a fake sign-in and API) | **30 of 30 pass**; a CSP violation or an uncaught error fails any of them |
+| **Deliberate breakage** | Removing the sign-in state check, inserting API text as HTML, and also saving the token in `localStorage`: **each made the matching test fail** (3 of 3 caught); the files were restored exactly |
+| **Live browser test** (the real hosted login and the real API) | **Passed**: sign-in on Cognito's own pages, a clean address, nothing stored, create, a duplicate (409), read directly and via Lambda, compare, a missing order (404), sign-out; **no CSP violation and no console error beyond the two intentional HTTP errors**; the temporary user and rows were removed (0 left) |
+| Clean install | `npm ci --ignore-scripts` from the lockfile, 0 vulnerabilities, all tests pass |
+
+**Environment note:** the Chromium download worked, but this WSL lacked four system libraries (`libnspr4`, `libnss3`, `libnssutil3`, `libasound`); they were fetched as packages into a private folder and put on `LD_LIBRARY_PATH`, with no system change (the testing guide describes it).
+
+**Not measured yet:** publishing the app to the bucket is the owner's step (`scripts/deploy-frontend.sh`); the full `frontend-checks.sh` (the real 200 and 404) runs after it. **Cost:** a few cents at most (CloudFront inside its always-free allowance, S3 and Route 53 pennies, the certificate free, no web ACL); the bill was not read.
+
 ## Shutdown (End) verified
 
 After the final `terraform apply` with no variables (about 20:10 UTC), a check found: `waf_enabled`, `api_cache_enabled` and `dax_enabled`

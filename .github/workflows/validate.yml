@@ -82,6 +82,36 @@ jobs:
             exit 1
           fi
 
+  # Browser tests of the front end against a FAKE sign-in and a FAKE API (no AWS, no secrets): the real page in a real Chromium.
+  # The live tests (real Cognito and API) are run by hand: they need AWS credentials. The dependency is pinned by a lockfile and
+  # installed without lifecycle scripts; it is used only here, never in anything deployed.
+  frontend-browser-tests:
+    name: Browser tests of the front end (mocked)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: Install the test dependencies
+        working-directory: tests/e2e
+        run: npm ci --ignore-scripts
+
+      - name: Install Chromium and its system libraries
+        working-directory: tests/e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the browser tests
+        working-directory: tests/e2e
+        run: npx playwright test --project=mocked
+
   # Backstop for the local pre-commit hook (which can be skipped): scans every tracked file and every
   # line added by every commit in the pull request. Matches are redacted in the log. Optional repository
   # secret SECRET_SCAN_LITERALS (one value per line, e.g. the AWS account ID) adds an exact-match block

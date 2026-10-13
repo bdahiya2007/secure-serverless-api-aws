@@ -271,6 +271,20 @@ allowance is reached first.
 
 Details: [DISASTER_RECOVERY.md](DISASTER_RECOVERY.md) and [COGNITO_TESTING_RUNBOOK.md](COGNITO_TESTING_RUNBOOK.md).
 
+### The browser front end
+
+| Risk | How it is handled here | Residual |
+|---|---|---|
+| **Cross-site scripting (XSS)** | Everything shown is set with `textContent`, never parsed as HTML; a Content Security Policy forbids inline script and style, `eval`, framing and calls to any host except the page, the API and the sign-in host. A browser test feeds script and markup through every API field and checks none runs; another checks an injected inline script is blocked | A new dependency or an `innerHTML` added later would reopen it: the tests were shown to catch that change |
+| **Token theft** | The ID token lives in memory only (no `localStorage`, cookies or refresh token); the sign-in uses PKCE and checks `state`; the token is never put in a URL, a log or a message | A script that does run on the page could still read the in-memory token; a session lasts about an hour |
+| **Authorization code interception** | The code is single-use and bound to a verifier only the page holds; it is removed from the address bar immediately | None beyond the above |
+| **Stale or tampered files** | HTML revalidates every time, other files cache for 5 minutes, and every deploy invalidates CloudFront; the bucket is private, versioned and writable only by the owner's credentials | An invalidation takes up to about a minute |
+| **A traffic flood billing** (pay-as-you-go CloudFront has no overage cap) | A free alarm on requests per hour, the $5 budget alert, the always-free allowance; the optional web ACL (about $6 a month) protects only the static files, not the API | A large enough flood could still cost money; a CloudFront flat-rate plan (no overage charges) is an option to evaluate |
+| **Supply chain** | The deployed page has **no dependencies**; the test tools are a separate package with a lockfile, a pinned version, 0 known vulnerabilities and no install scripts | The test dependency is trusted at install time in CI |
+| **Wider scope in the account** | A separate Terraform stack with its own state (the pipeline cannot reach it) that only adds resources, and a before-and-after check that the existing website is unchanged | Applied locally, outside the approval-gated pipeline |
+
+Details: the [runbook](../terraform/README.md#front-end-hosting-separate-stack-applied-locally) and [FAQ](FAQ.md).
+
 ### Direct DynamoDB read
 
 | Risk | How it is handled | Residual |
