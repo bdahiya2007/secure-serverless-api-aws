@@ -400,6 +400,29 @@ The hosted zone is already paid for by the existing site.
 
 See [TESTING.md](../docs/TESTING.md) for the replication, conflict and failover checks.
 
+## Hosted sign-in for a browser front end (optional, off by default)
+
+Cognito's **hosted sign-in pages** let a browser app sign users in without handling passwords itself: the app redirects to the pages, the user signs in, and Cognito redirects back with a one-time code that the app
+exchanges for tokens (the **authorization code flow with PKCE**). Everything here is free on the Lite plan, and it needs no Google account and no secrets.
+
+| Setting | Value |
+|---|---|
+| Switches | `cognito_domain_prefix` (empty by default: the hosted pages stay off) and `browser_callback_urls` (empty: no browser client). The pipeline reads the repository **variables** `COGNITO_DOMAIN_PREFIX` (a plain string) and `BROWSER_CALLBACK_URLS` (a JSON list), so a merge does not remove them; neither is a secret and neither is committed. |
+| Hosted domain | `<prefix>.auth.<region>.amazoncognito.com`: lower-case letters, numbers and hyphens, unique per region across all AWS accounts, and it may not contain `aws`, `amazon` or `cognito`. The same domain is shared with Google sign-in; if both are on, `federated_domain_prefix` must equal `cognito_domain_prefix`. |
+| Browser client | `<pool>-browser-client`: public (no secret), authorization code flow only (no implicit flow), scopes `openid email`, identity provider Cognito (username and password), **exact** callback and sign-out URLs from `browser_callback_urls` (`https://host/[path]`, or `http://localhost:port/` for development; no wildcards), token revocation on. The ID token it yields is the one the API's authorizer already validates. |
+| Users | Still created by an administrator (no self sign-up); the hosted pages show no sign-up link. MFA stays optional TOTP. |
+| Untouched | The password (CLI) client and the Google client |
+
+```bash
+# set the repository variables (Settings, Secrets and variables, Actions, Variables), then merge so the pipeline applies; or locally:
+cd terraform/environments/dev
+terraform apply -var cognito_domain_prefix=<prefix> -var 'browser_callback_urls=["https://orders.example.com/","http://localhost:8765/"]'
+terraform output browser_signin          # host and client id: public values the front end needs (generated into its config)
+cd ../../.. && scripts/demo/hosted-signin-check.py   # signs a temporary user in on the hosted pages with no browser; cleans up
+```
+
+Notes: callback URLs are matched **exactly** (a missing trailing slash is a different URL); the user's session is the ID token (about an hour) and a refresh token (7 days), so the front end should keep tokens in memory or session storage; set the repository variables **before** merging, or the merge applies without them (a re-run of the deploy then picks them up).
+
 ## Sign-in with Google (optional, off by default)
 
 With `enable_federated_signin` on, people sign in with a Google account through Cognito's hosted pages, and the APIs accept the pool's ID token exactly as before.

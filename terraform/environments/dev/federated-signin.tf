@@ -7,6 +7,21 @@
 locals {
   federated_enabled    = var.enable_federated_signin
   federated_dr_enabled = var.enable_federated_signin && var.enable_multi_region
+
+  # One hosted domain per pool, shared by the browser client and Google sign-in. cognito_domain_prefix wins; Google sign-in
+  # alone falls back to federated_domain_prefix; null means no hosted UI.
+  hosted_ui_prefix = var.cognito_domain_prefix != "" ? var.cognito_domain_prefix : (local.federated_enabled ? var.federated_domain_prefix : null)
+}
+
+resource "terraform_data" "hosted_ui_prefix_check" {
+  count = var.cognito_domain_prefix != "" && local.federated_enabled ? 1 : 0
+
+  lifecycle {
+    precondition {
+      condition     = var.cognito_domain_prefix == var.federated_domain_prefix
+      error_message = "cognito_domain_prefix and federated_domain_prefix name the same hosted domain: set them to the same value, or set only one."
+    }
+  }
 }
 
 module "signin_guard" {

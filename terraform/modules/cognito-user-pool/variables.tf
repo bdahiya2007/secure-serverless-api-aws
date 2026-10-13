@@ -79,7 +79,7 @@ variable "tags" {
 }
 
 variable "domain_prefix" {
-  description = "Prefix of the hosted sign-in domain (<prefix>.auth.<region>.amazoncognito.com). Setting it turns on federated sign-in with Google and requires google_client_id and google_client_secret. Lower-case letters, numbers and hyphens; may not contain aws, amazon or cognito."
+  description = "Prefix of the hosted sign-in domain (<prefix>.auth.<region>.amazoncognito.com). Setting it turns on Cognito's hosted sign-in pages (free on the Lite plan); a browser client and Google sign-in are then optional extras. Lower-case letters, numbers and hyphens; may not contain aws, amazon or cognito."
   type        = string
   default     = null
 
@@ -90,13 +90,13 @@ variable "domain_prefix" {
 }
 
 variable "google_client_id" {
-  description = "Client ID of the Google OAuth client. Required with domain_prefix. Not a secret."
+  description = "Client ID of the Google OAuth client. Setting it turns on Google sign-in, which needs domain_prefix, google_client_secret and the sign-in guard. Not a secret."
   type        = string
   default     = null
 }
 
 variable "google_client_secret" {
-  description = "Client secret of the Google OAuth client. Required with domain_prefix. A SECRET: pass it at apply time (TF_VAR_google_client_secret), never commit it. It is stored in the Terraform state."
+  description = "Client secret of the Google OAuth client. Required with google_client_id. A SECRET: pass it at apply time (TF_VAR_google_client_secret), never commit it. It is stored in the Terraform state."
   type        = string
   default     = null
   sensitive   = true
@@ -117,4 +117,15 @@ variable "signin_guard_lambda_arn" {
   description = "ARN of the sign-in guard Lambda (pre sign-up and pre token generation). Null means no guard. With federated sign-in on, a guard is required."
   type        = string
   default     = null
+}
+
+variable "browser_callback_urls" {
+  description = "Exact URLs the hosted sign-in pages may redirect back to after sign-in and sign-out, for a browser front end (for example https://orders.example.com/ and http://localhost:8765/). Setting any creates a public browser client (authorization code flow with PKCE, username and password on the hosted pages) and needs domain_prefix. http is allowed for localhost only."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for u in var.browser_callback_urls : can(regex("^(https://[a-z0-9]([a-z0-9.-]*[a-z0-9])?|http://localhost)(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$", u))])
+    error_message = "Each callback URL must be https://host[:port][/path], or http://localhost[:port][/path]: exact, lower-case host, no wildcard, no query or fragment."
+  }
 }

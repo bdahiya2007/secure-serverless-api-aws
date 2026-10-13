@@ -80,39 +80,91 @@ resource "aws_cognito_user_pool_client" "this" {
 }
 
 # ---------------------------------------------------------------------------
-# Optional federated sign-in with Google through Cognito's classic hosted UI (all included in the Lite plan; social users
-# count as ordinary monthly active users). Off unless a domain prefix is given. The password client above is untouched.
+# Optional hosted sign-in (Cognito's classic hosted UI, included in the Lite plan and free). Off unless a domain prefix is given.
+#   * hosted UI:  a domain (<prefix>.auth.<region>.amazoncognito.com) with Cognito's own sign-in pages.
+#   * browser client: a public client for a front end (authorization code flow with PKCE) with username and password on those
+#     pages, when browser_callback_urls is given. Users are still created by an administrator (no self sign-up).
+#   * Google: an optional identity provider and a separate Google-only client (needs the sign-in guard); off unless a Google
+#     client ID is given. The password client above is untouched by all of this.
 # ---------------------------------------------------------------------------
 
 locals {
-  federated = var.domain_prefix != null
+  hosted_ui = var.domain_prefix != null
+  google    = var.google_client_id != null
+  browser   = local.hosted_ui && length(var.browser_callback_urls) > 0
 }
 
-resource "terraform_data" "federated_check" {
-  count = local.federated ? 1 : 0
+resource "terraform_data" "hosted_ui_check" {
+  count = length(var.browser_callback_urls) > 0 || local.google ? 1 : 0
 
   lifecycle {
     precondition {
-      condition     = var.google_client_id != null && var.google_client_secret != null
-      error_message = "domain_prefix (federated sign-in) needs google_client_id and google_client_secret."
+      condition     = local.hosted_ui
+      error_message = "browser_callback_urls and Google sign-in both need the hosted UI: set domain_prefix."
+    }
+  }
+}
+
+resource "terraform_data" "federated_check" {
+  count = local.google ? 1 : 0
+
+  lifecycle {
+    precondition {
+      condition     = var.google_client_secret != null
+      error_message = "Google sign-in (google_client_id) needs google_client_secret."
     }
 
     precondition {
       condition     = var.signin_guard_lambda_arn != null
-      error_message = "Federated sign-in needs the sign-in guard (signin_guard_lambda_arn). Without it any Google account could sign in."
+      error_message = "Google sign-in needs the sign-in guard (signin_guard_lambda_arn). Without it any Google account could sign in."
     }
   }
 }
 
 resource "aws_cognito_user_pool_domain" "this" {
-  count = local.federated ? 1 : 0
+  count = local.hosted_ui ? 1 : 0
 
   domain       = var.domain_prefix
   user_pool_id = aws_cognito_user_pool.this.id
 }
 
+# Public client for a browser front end: authorization code flow with PKCE (no secret, no implicit flow), signing in with a
+# username and password on the hosted pages. The ID token it yields is the one the API's authorizer already validates.
+resource "aws_cognito_user_pool_client" "browser" {
+  count = local.browser ? 1 : 0
+
+  name         = "${var.name}-browser-client"
+  user_pool_id = aws_cognito_user_pool.this.id
+
+  generate_secret = false
+
+  allowed_oauth_flows_user_pool_client = true
+  allowed_oauth_flows                  = ["code"]
+  allowed_oauth_scopes                 = ["openid", "email"]
+  supported_identity_providers         = ["COGNITO"]
+  callback_urls                        = var.browser_callback_urls
+  logout_urls                          = var.browser_callback_urls
+
+  explicit_auth_flows = ["ALLOW_REFRESH_TOKEN_AUTH"]
+
+  prevent_user_existence_errors = "ENABLED"
+  enable_token_revocation       = true
+
+  access_token_validity  = var.access_token_validity_minutes
+  id_token_validity      = var.id_token_validity_minutes
+  refresh_token_validity = var.refresh_token_validity_days
+
+  token_validity_units {
+    access_token  = "minutes"
+    id_token      = "minutes"
+    refresh_token = "days"
+  }
+
+  depends_on = [aws_cognito_user_pool_domain.this]
+}
+
 resource "aws_cognito_identity_provider" "google" {
-  count = local.federated ? 1 : 0
+  count = local.google ? 1 : 0
 
   user_pool_id  = aws_cognito_user_pool.this.id
   provider_name = "Google"
@@ -130,12 +182,14 @@ resource "aws_cognito_identity_provider" "google" {
     name           = "name"
     username       = "sub"
   }
+
+  depends_on = [aws_cognito_user_pool_domain.this]
 }
 
-# A separate public app client for the browser (authorization code flow with PKCE). It offers Google only: no password
+# A separate public app client for Google sign-in (authorization code flow with PKCE). It offers Google only: no password
 # sign-in through the hosted pages, and no implicit flow.
 resource "aws_cognito_user_pool_client" "federated" {
-  count = local.federated ? 1 : 0
+  count = local.google ? 1 : 0
 
   name         = "${var.name}-federated-client"
   user_pool_id = aws_cognito_user_pool.this.id
