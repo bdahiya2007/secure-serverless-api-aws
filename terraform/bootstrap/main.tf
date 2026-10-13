@@ -313,6 +313,15 @@ data "aws_iam_policy_document" "deploy" {
     resources = ["arn:aws:cognito-idp:${local.region}:${local.account_id}:userpool/*"]
   }
 
+  # DescribeUserPoolDomain takes a domain name, not a user pool, so it cannot be scoped to a pool ARN and needs "*". Terraform
+  # calls it to wait for a new hosted domain and on every refresh afterwards; without it the deploy fails (it did, on the first
+  # apply of the hosted sign-in). Read-only: it only reports which pool a domain belongs to.
+  statement {
+    sid       = "CognitoDomainDescribe"
+    actions   = ["cognito-idp:DescribeUserPoolDomain"]
+    resources = ["*"]
+  }
+
   statement {
     sid       = "WafWebAcl"
     actions   = ["wafv2:*"]

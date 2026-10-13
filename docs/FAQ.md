@@ -44,6 +44,10 @@ For an immediate cut-off also run `aws cognito-idp admin-user-global-sign-out` a
 With multi-region and Google sign-in both on, each region has its own pool and **both APIs trust both pools**. Verified: all four combinations (each pool's token on each API) were accepted. With multi-region alone there is one pool in us-east-1 that both APIs trust.
 Two separate pools do not share users, which is why Google (an external identity provider) is used: nothing has to be copied. Cognito's own multi-Region replication would share them; see the next question.
 
+### The deploy failed with AccessDenied on DescribeUserPoolDomain. What happened?
+The pipeline's deploy role lacked `cognito-idp:DescribeUserPoolDomain`, which cannot be limited to a user pool and so needs `*`. The first apply created the domain but could not wait for it, leaving it **tainted** in the state. Fix: apply the bootstrap (the permission was added), untaint the domain, and re-run the deploy.
+It never showed up in the Google demo because that was applied locally with broader permissions; a feature that moves from a local apply to the pipeline needs its resource types checked against the deploy role.
+
 ### Does a browser app need Google to sign in?
 No. With `cognito_domain_prefix` and `browser_callback_urls` set, Cognito's **hosted sign-in pages** sign users in with a username and password, using the **authorization code flow with PKCE**; no Google account, no client secret, and no cost on the Lite plan. Users are still created by an administrator (no self sign-up).
 Google stays an optional extra with its own client. See [runbook](../terraform/README.md#hosted-sign-in-for-a-browser-front-end-optional-off-by-default).

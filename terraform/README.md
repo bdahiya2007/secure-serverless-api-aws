@@ -421,6 +421,9 @@ terraform output browser_signin          # host and client id: public values the
 cd ../../.. && scripts/demo/hosted-signin-check.py   # signs a temporary user in on the hosted pages with no browser; cleans up
 ```
 
+**One-time bootstrap apply:** the pipeline's deploy role needs `cognito-idp:DescribeUserPoolDomain` (it cannot be scoped to a pool), so run `cd terraform/bootstrap && terraform apply` (a one-resource change) **before** the pipeline first applies the hosted domain.
+Without it the apply fails while waiting for the domain and, because the domain was created but not recorded cleanly, Terraform marks it **tainted** (it would be destroyed and recreated at the next apply): untaint it with `terraform untaint 'module.orders_user_pool.aws_cognito_user_pool_domain.this[0]'`, apply the bootstrap, then re-run the deploy.
+
 Notes: callback URLs are matched **exactly** (a missing trailing slash is a different URL); the user's session is the ID token (about an hour) and a refresh token (7 days), so the front end should keep tokens in memory or session storage; set the repository variables **before** merging, or the merge applies without them (a re-run of the deploy then picks them up).
 
 ## Sign-in with Google (optional, off by default)
