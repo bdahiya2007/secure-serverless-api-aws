@@ -4,9 +4,11 @@
 const ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
 const MAX_ITEMS = 100;
 
-const response = (statusCode, body) => ({
+import { corsHeaders } from "./cors.mjs";
+
+const response = (statusCode, body, extraHeaders = {}) => ({
   statusCode,
-  headers: { "Content-Type": "application/json" },
+  headers: { "Content-Type": "application/json", ...extraHeaders },
   body: JSON.stringify(body),
 });
 
@@ -32,10 +34,12 @@ export function toItem(item) {
 
 // query: async (params) => ({ Items, LastEvaluatedKey })
 // consistentRead: strongly consistent reads see the latest write but cannot be cached by DAX, which passes them through.
-export function createHandler({ query, tableName, consistentRead = true }) {
+// allowedOrigins: origins of the browser front end that may read responses (empty: no CORS headers, the default).
+export function createHandler({ query, tableName, consistentRead = true, allowedOrigins = [] }) {
   return async function handler(event, context) {
+    const cors = corsHeaders(event, allowedOrigins);
     const { orderId, error } = parseOrderId(event);
-    if (error) return response(400, { message: "Invalid order id", errors: [error] });
+    if (error) return response(400, { message: "Invalid order id", errors: [error] }, cors);
 
     let result;
     try {
@@ -54,11 +58,11 @@ export function createHandler({ query, tableName, consistentRead = true }) {
         errorName: err?.name,
         requestId: context?.awsRequestId,
       }));
-      return response(500, { message: "Internal error" });
+      return response(500, { message: "Internal error" }, cors);
     }
 
     const items = result.Items ?? [];
-    if (items.length === 0) return response(404, { message: "Order not found" });
+    if (items.length === 0) return response(404, { message: "Order not found" }, cors);
 
     return response(200, {
       orderId,
@@ -66,6 +70,6 @@ export function createHandler({ query, tableName, consistentRead = true }) {
       items: items.map(toItem),
       // Unlike the VTL template, code can tell the client that the 100-item cap cut the list off.
       truncated: result.LastEvaluatedKey !== undefined,
-    });
+    }, cors);
   };
 }

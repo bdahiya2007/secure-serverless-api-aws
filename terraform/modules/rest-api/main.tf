@@ -22,6 +22,27 @@ locals {
     for k, r in var.routes : k => r.child_path_part == null ? r.path_part : "${r.path_part}/${replace(r.child_path_part, "/\\{[^}]+\\}/", "*")}"
   }
 
+  # CORS (browser front end). Off unless origins are given. A response template for the non-proxy (direct DynamoDB) route and
+  # the OPTIONS preflight sets Access-Control-Allow-Origin to the request's Origin only when that exact origin is listed.
+  cors_enabled     = length(var.cors_allowed_origins) > 0
+  cors_origin_list = "[${join(",", [for o in var.cors_allowed_origins : jsonencode(o)])}]"
+  cors_vtl_origin  = <<-EOT
+    #set($corsOrigin = $input.params('Origin'))
+    #set($corsAllowed = ${local.cors_origin_list})
+    #if($corsAllowed.contains($corsOrigin))
+    #set($context.responseOverride.header.Access-Control-Allow-Origin = $corsOrigin)
+    #end
+    #set($context.responseOverride.header.Vary = "Origin")
+  EOT
+  # Prepended to the direct-route response templates; empty when CORS is off, so those templates are unchanged.
+  cors_vtl_prefix = local.cors_enabled ? local.cors_vtl_origin : ""
+
+  # Every resource that has a method needs an OPTIONS method for the preflight, listing that resource's real method.
+  cors_targets = local.cors_enabled ? merge(
+    { for k, r in var.routes : "route-${k}" => { resource_id = local.route_resource_ids[k], method = r.http_method } },
+    { for k, r in var.dynamodb_routes : "ddb-${k}" => { resource_id = aws_api_gateway_resource.dynamodb[k].id, method = r.http_method } },
+  ) : {}
+
   # One method response per outcome. 404 is produced by the success template through
   # $context.responseOverride.status, so it has no integration response of its own.
   dynamodb_statuses              = ["200", "400", "404", "500"]
@@ -201,7 +222,7 @@ resource "aws_api_gateway_integration_response" "dynamodb" {
   selection_pattern = local.dynamodb_selection_patterns[each.value.status]
 
   response_templates = {
-    "application/json" = each.value.status == "200" ? var.dynamodb_routes[each.value.route].response_template : local.dynamodb_static_bodies[each.value.status]
+    "application/json" = "${local.cors_vtl_prefix}${each.value.status == "200" ? var.dynamodb_routes[each.value.route].response_template : local.dynamodb_static_bodies[each.value.status]}"
   }
 
   depends_on = [aws_api_gateway_integration.dynamodb, aws_api_gateway_method_response.dynamodb]
@@ -263,6 +284,85 @@ resource "aws_api_gateway_integration_response" "health" {
   depends_on = [aws_api_gateway_integration.health]
 }
 
+# ---------------------------------------------------------------------------
+# Optional CORS for a browser front end. A browser sends an unauthenticated OPTIONS "preflight" before a cross-origin call that
+# has an Authorization header, so each route's resource gets an OPTIONS method answered by API Gateway itself (a MOCK
+# integration: no Lambda or DynamoDB call, nothing billed beyond the request). The method has no authorizer on purpose,
+# because the browser sends no credentials in a preflight; it returns no data.
+# ---------------------------------------------------------------------------
+
+resource "aws_api_gateway_method" "cors" {
+  for_each = local.cors_targets
+
+  rest_api_id   = aws_api_gateway_rest_api.this.id
+  resource_id   = each.value.resource_id
+  http_method   = "OPTIONS"
+  authorization = "NONE" # a preflight carries no credentials; the response holds no data
+}
+
+resource "aws_api_gateway_integration" "cors" {
+  for_each = local.cors_targets
+
+  rest_api_id = aws_api_gateway_rest_api.this.id
+  resource_id = each.value.resource_id
+  http_method = aws_api_gateway_method.cors[each.key].http_method
+
+  type              = "MOCK"
+  request_templates = { "application/json" = "{\"statusCode\": 200}" }
+}
+
+resource "aws_api_gateway_method_response" "cors" {
+  for_each = local.cors_targets
+
+  rest_api_id     = aws_api_gateway_rest_api.this.id
+  resource_id     = each.value.resource_id
+  http_method     = aws_api_gateway_method.cors[each.key].http_method
+  status_code     = "200"
+  response_models = { "application/json" = "Empty" }
+}
+
+# The allow headers are added only for a listed origin; Vary: Origin is always added so caches do not mix origins.
+resource "aws_api_gateway_integration_response" "cors" {
+  for_each = local.cors_targets
+
+  rest_api_id = aws_api_gateway_rest_api.this.id
+  resource_id = each.value.resource_id
+  http_method = aws_api_gateway_method.cors[each.key].http_method
+  status_code = aws_api_gateway_method_response.cors[each.key].status_code
+
+  response_templates = {
+    "application/json" = <<-EOT
+      #set($corsOrigin = $input.params('Origin'))
+      #set($corsAllowed = ${local.cors_origin_list})
+      #if($corsAllowed.contains($corsOrigin))
+      #set($context.responseOverride.header.Access-Control-Allow-Origin = $corsOrigin)
+      #set($context.responseOverride.header.Access-Control-Allow-Methods = "${each.value.method},OPTIONS")
+      #set($context.responseOverride.header.Access-Control-Allow-Headers = "Authorization,Content-Type")
+      #set($context.responseOverride.header.Access-Control-Max-Age = "600")
+      #end
+      #set($context.responseOverride.header.Vary = "Origin")
+    EOT
+  }
+
+  depends_on = [aws_api_gateway_integration.cors]
+}
+
+# Errors that API Gateway produces itself (401 from the authorizer, 403, 429, request validation 400, 5xx) never reach a Lambda
+# or a template, so without this a browser sees an opaque network error instead of the status. A gateway response cannot choose
+# the origin dynamically, so these carry the header for the FIRST listed origin only (put the production origin first).
+resource "aws_api_gateway_gateway_response" "cors" {
+  for_each = local.cors_enabled ? toset(["DEFAULT_4XX", "DEFAULT_5XX"]) : toset([])
+
+  rest_api_id   = aws_api_gateway_rest_api.this.id
+  response_type = each.value
+
+  response_parameters = {
+    "gatewayresponse.header.Access-Control-Allow-Origin"  = "'${var.cors_allowed_origins[0]}'"
+    "gatewayresponse.header.Access-Control-Allow-Headers" = "'Authorization,Content-Type'"
+    "gatewayresponse.header.Vary"                         = "'Origin'"
+  }
+}
+
 resource "aws_api_gateway_deployment" "this" {
   rest_api_id = aws_api_gateway_rest_api.this.id
 
@@ -270,7 +370,7 @@ resource "aws_api_gateway_deployment" "this" {
   # plan time) instead of whole resource objects avoids a spurious redeploy after the
   # first apply, when provider-filled defaults change the objects.
   triggers = {
-    redeployment = sha1(jsonencode(concat([var.routes, var.cognito_user_pool_arns, var.dynamodb_routes, var.cache_enabled, var.cache_size_gb, var.cache_ttl_seconds, "cache-keys-v1"], var.enable_health_route ? ["health-v1"] : [])))
+    redeployment = sha1(jsonencode(concat([var.routes, var.cognito_user_pool_arns, var.dynamodb_routes, var.cache_enabled, var.cache_size_gb, var.cache_ttl_seconds, "cache-keys-v1"], var.enable_health_route ? ["health-v1"] : [], local.cors_enabled ? [jsonencode(["cors-v1", var.cors_allowed_origins])] : [])))
   }
 
   lifecycle {
@@ -282,6 +382,8 @@ resource "aws_api_gateway_deployment" "this" {
     aws_api_gateway_integration.dynamodb,
     aws_api_gateway_integration_response.dynamodb,
     aws_api_gateway_integration_response.health,
+    aws_api_gateway_integration_response.cors,
+    aws_api_gateway_gateway_response.cors,
   ]
 }
 

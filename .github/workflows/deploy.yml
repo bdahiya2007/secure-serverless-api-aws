@@ -81,6 +81,11 @@ jobs:
 
       - name: Terraform plan
         working-directory: ${{ env.WORKDIR }}
+        env:
+          # Origins of the browser front end for CORS: a repository VARIABLE (Settings, Secrets and variables, Actions, Variables),
+          # not a secret and not committed. A JSON list such as ["https://orders.example.com","http://localhost:8765"]; the first
+          # entry should be the production origin. Unset means no CORS, exactly as before.
+          TF_VAR_cors_allowed_origins: ${{ vars.CORS_ALLOWED_ORIGINS || '[]' }}
         run: terraform plan -no-color -out=tfplan
 
       # The job summary lists only what will change (action + resource address), never ARNs or

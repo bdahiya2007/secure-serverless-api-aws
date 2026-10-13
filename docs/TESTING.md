@@ -213,6 +213,20 @@ aws apigateway flush-stage-cache --rest-api-id "$(terraform -chdir=terraform/env
 
 Turn the cache off again afterwards (`terraform apply` without the variable) and confirm `terraform output api_cache_enabled` is `false`.
 
+### CORS (optional, for a browser front end)
+
+Only relevant when `cors_allowed_origins` is set (see the [runbook](../terraform/README.md#cors-for-a-browser-front-end-optional-off-by-default)). Unit tests for the Lambdas' CORS handling run with the others. Against the deployed API:
+
+```bash
+scripts/demo/cors-checks.sh            # checks: preflight on each route, a disallowed origin, a 401 from API Gateway, and real calls
+# by hand: a preflight from an allowed origin must return Access-Control-Allow-Origin equal to that origin
+curl -si -X OPTIONS "$BASE/orders" -H "Origin: https://orders.example.com" -H "Access-Control-Request-Method: POST" \
+  -H "Access-Control-Request-Headers: authorization,content-type" | grep -i '^access-control\|^vary\|^HTTP'
+```
+
+Expect an allowed origin to be echoed with `Allow-Methods`, `Allow-Headers` (including `Authorization`) and `Max-Age`; any other origin gets only `Vary: Origin` (no allow header and no wildcard);
+a 401 from API Gateway carries the allow header for the **first** listed origin only; real responses (200, 201, 400, 404, 409) echo an allowed origin.
+
 ## 4. Check observability
 
 After a few calls:

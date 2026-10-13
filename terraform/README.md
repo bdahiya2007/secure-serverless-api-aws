@@ -104,9 +104,36 @@ aws lambda invoke --function-name save-order \
 | Authorization | **Cognito user pool authorizer** (`COGNITO_USER_POOLS`): requests need a valid ID token in the `Authorization` header. The module rejects `NONE`; `AWS_IAM` is also supported. |
 | Request validation | JSON Schema model (`terraform/environments/dev/models/create-order.json`) rejects bad bodies before the Lambda runs. The Lambda validates again (defense in depth); keep the two in sync. |
 | Throttling | 5 requests/second, burst 10, **per method** (the `*/*` default gives each method its own token bucket; all callers of a method share it, it is not per client). Requests rejected with 401 before the method is reached did **not** consume it in a test (see the WAF section) |
-| Not enabled | Access logs (needs an account-wide CloudWatch role), CORS, X-Ray on the API stage. A custom domain exists only with the optional multi-region setup. The stage cache and the WAF are available but **off by default** (see below). |
+| CORS | **Off by default** (`cors_allowed_origins`, see [CORS for a browser front end](#cors-for-a-browser-front-end-optional-off-by-default) below). |
+| Not enabled | Access logs (needs an account-wide CloudWatch role), X-Ray on the API stage. A custom domain exists only with the optional multi-region setup. The stage cache and the WAF are available but **off by default** (see below). |
 
 Cost: REST API requests are about $3.50 per million. There is no charge while idle.
+
+## CORS for a browser front end (optional, off by default)
+
+A browser calling this API from another origin (for example `https://orders.example.com`) first sends an unauthenticated **preflight** `OPTIONS` request, and
+refuses to show the response unless it carries an `Access-Control-Allow-Origin` header for that origin. `cors_allowed_origins` (empty by default, in which case nothing changes) lists the
+origins that may call the API. REST APIs have no built-in CORS, so it is added in four places:
+
+| Where | What happens | Why |
+|---|---|---|
+| **Preflight** | Each route's resource gets an `OPTIONS` method answered by API Gateway itself (a MOCK integration: no Lambda or DynamoDB call, nothing billed beyond the request). For a listed origin it returns `Allow-Origin` (the origin echoed), `Allow-Methods` (that route's method and `OPTIONS`), `Allow-Headers: Authorization,Content-Type` and `Max-Age: 600`; for any other origin it returns none of them. | The browser sends no credentials in a preflight, so this method has **no authorizer** and returns no data |
+| **Lambda routes** (`POST /orders`, `GET /orders-via-lambda/{id}`) | The function echoes the request's `Origin` when it is on the list (`ALLOWED_ORIGINS` environment variable), on **every** response: 200, 201, 400, 404, 409 and 500 | API Gateway adds nothing to a Lambda proxy response |
+| **Direct DynamoDB route** (`GET /orders/{id}`) | The response templates set the same header from the request's `Origin` | Same reason, for the non-proxy integration |
+| **Errors API Gateway produces itself** (401 from the authorizer, 403, 429, request validation 400, 5xx) | Gateway responses add the header for the **first** listed origin only | A gateway response cannot choose the origin dynamically. Put the production origin first; a second origin (such as `http://localhost:8765` for development) will see these errors as an opaque network error |
+
+Rules and trade-offs:
+- **Exact origins only, never `*`.** Each must be `https://host[:port]`, or `http://localhost[:port]`, with no path or trailing slash (the module rejects anything else). A listed origin is echoed exactly; `Vary: Origin` is always added so caches do not mix origins. No credentials mode is used (the API takes a bearer token, not cookies).
+- **CORS is not authentication.** It only tells browsers which sites may read responses. Every route still needs a valid token, and a non-browser client ignores CORS entirely.
+- **The pipeline keeps it on.** The dev stack is applied on every merge to `main` with every optional switch off; `deploy.yml` passes the repository **variable** `CORS_ALLOWED_ORIGINS` (a JSON list such as `["https://orders.example.com","http://localhost:8765"]`, set under Settings, Secrets and variables, Actions, Variables) so a merge does not remove CORS. It is not a secret and is not committed. Unset means no CORS.
+- **The second region's API** gets the same list and its Lambdas the same `ALLOWED_ORIGINS`.
+- **Cost:** nothing extra (a preflight is one more request at the normal price).
+
+```bash
+cd terraform/environments/dev
+terraform apply -var 'cors_allowed_origins=["https://orders.example.com","http://localhost:8765"]'
+cd ../../.. && scripts/demo/cors-checks.sh        # preflight, gateway errors and real calls; cleans up after itself
+```
 
 ## Reading orders: direct DynamoDB integration (`GET /orders/{orderId}`)
 

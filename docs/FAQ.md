@@ -107,6 +107,11 @@ See [runbook](../terraform/README.md#api-gateway-stage-cache-optional-billed-off
 ### Why does `GET /` or `GET /orders` say "Missing Authentication Token"?
 There is no route there: `/orders` accepts only `POST`, and `/` has none. API Gateway answers `403 Missing Authentication Token` for any undefined route and method. Working paths are `/health` (multi-region only), `POST /orders`, `GET /orders/{id}` and `GET /orders-via-lambda/{id}`.
 
+### How does CORS work here, and is it a security control?
+It is **off by default**. With `cors_allowed_origins` set, a browser front end at a listed origin can call the API: each route answers the browser's preflight `OPTIONS` request (a MOCK integration, no backend call), the Lambdas and the direct-read templates echo an allowed `Origin`
+on every response, and gateway responses add the header for the **first** listed origin for errors API Gateway produces itself (such as 401). Only exact origins are accepted, never `*`. **CORS is not authentication:** it only tells browsers which sites may read responses; every route still needs a valid token, and non-browser clients ignore it.
+See [runbook: CORS](../terraform/README.md#cors-for-a-browser-front-end-optional-off-by-default).
+
 ### Are there API access logs?
 Not enabled: they need an account-wide API Gateway CloudWatch role and have a small cost, so it needs a decision first. Writes leave Lambda logs and X-Ray traces; direct reads leave neither. See the roadmap in the [README](../README.md#known-limitations-and-roadmap).
 
