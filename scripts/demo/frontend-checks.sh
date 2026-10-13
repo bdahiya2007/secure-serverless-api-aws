@@ -10,15 +10,21 @@ TOP=$(git rev-parse --show-toplevel)
 SITE=${SITE:-$(sed -n 's/^domain_name *= *"\(.*\)".*/\1/p' "$TOP/terraform/frontend/terraform.tfvars" 2>/dev/null | head -1)}
 [ -n "$SITE" ] || { echo "Set SITE=<front end name> (or terraform/frontend/terraform.tfvars)." >&2; exit 2; }
 BUCKET=$(terraform -chdir="$TOP/terraform/frontend" output -raw bucket_name 2>/dev/null || true)
-PASS=0; FAIL=0
+PASS=0; FAIL=0; SKIP=0
 ok()   { PASS=$((PASS+1)); echo "  ok   $1"; }
+skip() { SKIP=$((SKIP+1)); echo "  skip $1"; }
 bad()  { FAIL=$((FAIL+1)); echo "  FAIL $1"; }
 check() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
+# Until the page (index.html) and its error page (error.html) are uploaded, CloudFront has nothing to serve or to swap in for a missing
+# file, so it passes S3's plain 403 through; those checks are skipped, not failed. Everything else (TLS, headers, config.json) is checked.
+HAS_PAGE=0
+if [ -n "$BUCKET" ] && aws s3api head-object --bucket "$BUCKET" --key index.html >/dev/null 2>&1 && aws s3api head-object --bucket "$BUCKET" --key error.html >/dev/null 2>&1; then HAS_PAGE=1; fi
 H=$(curl -sI -m 20 "https://$SITE/" | tr -d '\r'); STATUS=$(echo "$H" | head -1 | awk '{print $2}')
 hv() { echo "$H" | awk -F': ' -v n="$1" 'tolower($1)==tolower(n){sub(/^[^:]*: /,""); print; exit}'; }
 
 echo "== $SITE: HTTPS, TLS and redirects"
-check "HTTPS answers (200 once the page is uploaded, 404 before)" '[ "$STATUS" = 200 ] || [ "$STATUS" = 404 ]'
+if [ $HAS_PAGE = 1 ]; then check "the page is served (200)" '[ "$STATUS" = 200 ]'; else skip "the page is served (200): index.html and error.html are not uploaded yet"; fi
+check "CloudFront answers over HTTPS (any status)"            '[ -n "$STATUS" ]'
 check "plain HTTP redirects to HTTPS"                           '[ "$(curl -s -o /dev/null -m 20 -w "%{http_code} %{redirect_url}" "http://$SITE/")" = "301 https://$SITE/" ]'
 check "TLS 1.3 works"                                           'curl -s -o /dev/null -m 20 --tlsv1.3 "https://$SITE/"'
 check "TLS 1.2 is refused (minimum TLS 1.3)"                    '! curl -s -o /dev/null -m 20 --tls-max 1.2 "https://$SITE/"'
@@ -47,6 +53,12 @@ check "config.json holds no secret-looking keys"                 '! echo "$CFG" 
 check "config.json is not cached (no-cache)"                     'curl -sI -m 20 "https://$SITE/config.json" | grep -qi "^cache-control:.*no-cache"'
 
 echo "== missing files"
-check "a missing file returns a real 404"                        '[ "$(curl -s -o /dev/null -m 20 -w "%{http_code}" "https://$SITE/does-not-exist-$RANDOM.html")" = 404 ]'
-check "a request for a private-looking path returns 404"         '[ "$(curl -s -o /dev/null -m 20 -w "%{http_code}" "https://$SITE/.git/config")" = 404 ]'
-echo; echo "result: $PASS passed, $FAIL failed"; [ "$FAIL" = 0 ]
+if [ $HAS_PAGE = 1 ]; then
+  check "a missing file returns a real 404"                      '[ "$(curl -s -o /dev/null -m 20 -w "%{http_code}" "https://$SITE/does-not-exist-$RANDOM.html")" = 404 ]'
+  check "a request for a private-looking path returns 404"       '[ "$(curl -s -o /dev/null -m 20 -w "%{http_code}" "https://$SITE/.git/config")" = 404 ]'
+else
+  skip "a missing file returns a real 404: needs error.html uploaded"
+  skip "a private-looking path returns 404: needs error.html uploaded"
+  check "a missing file is never served (not 200)"               '[ "$(curl -s -o /dev/null -m 20 -w "%{http_code}" "https://$SITE/.git/config")" != 200 ]'
+fi
+echo; echo "result: $PASS passed, $FAIL failed, $SKIP skipped"; [ "$FAIL" = 0 ]
