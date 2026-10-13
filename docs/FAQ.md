@@ -30,7 +30,7 @@ ID and access tokens 60 minutes, refresh tokens 7 days (the Google consent scree
 It is **optional**, with app-based TOTP only (free). SMS MFA is billed and is not configured. Making it required for the pool is on the to-do list.
 
 ### Why does the CLI use `USER_PASSWORD_AUTH`?
-For testing only: it lets scripts sign in without a browser. Browsers and production apps should use the **authorization code flow with PKCE**, which the separate Google client already does (it offers Google only, with no password flow and no client secret).
+For testing only: it lets scripts sign in without a browser. Browsers and production apps should use the **authorization code flow with PKCE**, which the front end's browser client and the separate Google client already do (neither has a client secret or a password flow).
 
 ### How does sign-in with Google work, and who gets in?
 Cognito's hosted pages send the user to Google, then issue the pool's own ID token. A **guard Lambda** (pre sign-up and pre token generation triggers) admits only allow-listed addresses, checked on **every sign-in and refresh**; it fails closed, gives no reason, and never logs an
