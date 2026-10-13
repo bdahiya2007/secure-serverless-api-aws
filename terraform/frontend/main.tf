@@ -82,5 +82,7 @@ module "site" {
   waf_rate_limit          = var.waf_rate_limit
   request_alarm_threshold = var.request_alarm_threshold
 
-  depends_on = [terraform_data.checks]
+  # No depends_on on the checks object: it would defer the module's data lookups (the managed cache policy) to apply time, and the
+  # AWS provider then fails with "inconsistent final plan" because the policy ID was unknown when the distribution was planned. The
+  # preconditions on terraform_data.checks still stop the plan with their messages, since every resource is evaluated at plan time.
 }

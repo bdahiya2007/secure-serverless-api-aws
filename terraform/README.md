@@ -440,6 +440,8 @@ cd ../.. && scripts/demo/static-site-snapshot.sh compare         # AFTER: must s
 scripts/demo/frontend-checks.sh                                  # HTTPS, TLS 1.3, headers, private bucket, config.json, 404s
 ```
 
+**If the first apply stops** with `Provider produced inconsistent final plan` about `cache_policy_id`: an earlier version made the module wait on the checks object, which deferred the managed cache-policy lookup to apply time and the AWS provider mishandled the unknown value. It is fixed (no `depends_on`); the partial apply is safe (13 of 18 resources were created) and re-running `terraform apply` finishes the remaining 5.
+
 Remove it with `terraform destroy` in `terraform/frontend` (the bucket must be empty; it is versioned, so delete all versions first). The DNS records and the certificate go with it.
 
 ## Hosted sign-in for a browser front end (optional, off by default)
