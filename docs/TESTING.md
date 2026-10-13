@@ -356,7 +356,7 @@ scripts/demo/frontend-checks.sh                 # the deployed front end: wait a
 | Security headers | HSTS (2 years), `nosniff`, frame DENY, referrer policy, permissions policy, COOP and CORP same-origin, and a CSP with no `unsafe-inline` or `unsafe-eval` whose `connect-src` is only itself, the API and the Cognito host |
 | The bucket | Its own URL is not readable (403): only CloudFront can read it |
 | `config.json` | JSON with the API URL, sign-in host, client ID and redirect URI; no secret-looking keys; not cached |
-| Missing files | A real 404, including for a path like `/.git/config` |
+| Missing files | A real 404, including for a path like `/.git/config`. **Until `index.html` and `error.html` are uploaded** (the app, a later step) CloudFront has no error page to swap in and passes S3's plain 403 through, so these checks are reported as skipped, not failed |
 
 ## Troubleshooting
 
