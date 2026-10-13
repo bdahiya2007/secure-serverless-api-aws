@@ -249,7 +249,19 @@ The front end ([runbook](../terraform/README.md#front-end-hosting-separate-stack
 
 **Environment note:** the Chromium download worked, but this WSL lacked four system libraries (`libnspr4`, `libnss3`, `libnssutil3`, `libasound`); they were fetched as packages into a private folder and put on `LD_LIBRARY_PATH`, with no system change (the testing guide describes it).
 
-**Not measured yet:** publishing the app to the bucket is the owner's step (`scripts/deploy-frontend.sh`); the full `frontend-checks.sh` (the real 200 and 404) runs after it. **Cost:** a few cents at most (CloudFront inside its always-free allowance, S3 and Route 53 pennies, the certificate free, no web ACL); the bill was not read.
+**Published**
+
+The app was previewed locally, then published with `scripts/deploy-frontend.sh` (the unit tests first, 10 files uploaded with cache headers, a CloudFront invalidation).
+
+| Check | Result |
+|---|---|
+| `frontend-checks.sh` after publishing | **22 passed, 0 failed, 0 skipped**: the three checks that were skipped on the empty bucket now run, including the real 200 on the page and real 404s for a missing file and a private-looking path |
+| **The live browser test against the published site** (`E2E_BASE_URL=https://<the front end's name>`) | **Passed**: sign-in on Cognito's real hosted pages and back to the CloudFront-served page, a clean address, nothing stored, create, a duplicate (409), read directly and via Lambda, compare, a missing order (404), sign-out; no CSP violation and no unexpected console error; the temporary user and rows removed (0 left) |
+| The same live test against the local dev server | Still passes (the default mode) |
+
+The only 404 in the local server's log during the preview was the browser's automatic request for `/favicon.ico`, which the site does not have.
+
+**Cost:** a few cents at most (CloudFront inside its always-free allowance, S3 and Route 53 pennies, the certificate free, no web ACL); **the bill was not read**.
 
 ## Shutdown (End) verified
 

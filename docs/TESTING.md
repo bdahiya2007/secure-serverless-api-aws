@@ -389,6 +389,7 @@ npm ci --ignore-scripts
 npx playwright install --with-deps chromium    # downloads Chromium; --with-deps also installs system libraries (needs sudo on Linux)
 npm test                                       # the MOCKED tests: a fake sign-in and a fake API, no AWS, no secrets (also run in CI)
 AWS_PROFILE=... npm run test:live              # the LIVE test: real hosted login and real API (needs AWS credentials; creates one temporary user and removes it)
+E2E_BASE_URL=https://orders.example.com AWS_PROFILE=... npm run test:live    # the same, against the PUBLISHED site (no local server; its address must be a registered callback URL)
 ```
 
 | Suite | What it checks |
