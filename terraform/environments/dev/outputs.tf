@@ -110,3 +110,8 @@ output "dr_user_pool_client_id" {
   description = "Second region's password app client ID (for CLI test users), or null."
   value       = try(module.dr_user_pool[0].client_id, null)
 }
+
+output "cors_allowed_origins" {
+  description = "Origins of the browser front end that may call the API (CORS); empty when CORS is off. Used by scripts/demo/cors-checks.sh. Not secret."
+  value       = var.cors_allowed_origins
+}

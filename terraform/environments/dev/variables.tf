@@ -137,3 +137,9 @@ variable "federated_callback_urls" {
   type        = list(string)
   default     = ["http://localhost:8765/callback"]
 }
+
+variable "cors_allowed_origins" {
+  description = "Origins of the browser front end that may call the API (CORS), for example [\"https://orders.example.com\", \"http://localhost:8765\"]. Empty (the default) leaves the API exactly as it was. The FIRST origin is also used for errors that API Gateway produces itself, so list the production origin first. Passed to both APIs and the Lambdas (as ALLOWED_ORIGINS). The pipeline reads the repository variable CORS_ALLOWED_ORIGINS; it is not committed."
+  type        = list(string)
+  default     = []
+}

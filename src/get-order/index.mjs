@@ -2,6 +2,7 @@ import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, QueryCommand } from "@aws-sdk/lib-dynamodb";
 import { createHandler } from "./get-order.mjs";
 import { createQuery } from "./client.mjs";
+import { parseAllowedOrigins } from "./cors.mjs";
 
 const tableName = process.env.TABLE_NAME;
 if (!tableName) throw new Error("TABLE_NAME environment variable is required");
@@ -18,4 +19,5 @@ const { query, consistentRead, backend } = await createQuery({
 
 console.log(JSON.stringify({ message: "read backend selected", backend, consistentRead }));
 
-export const handler = createHandler({ tableName, query, consistentRead });
+// Origins of the browser front end (comma-separated ALLOWED_ORIGINS). Empty by default: no CORS headers.
+export const handler = createHandler({ tableName, query, consistentRead, allowedOrigins: parseAllowedOrigins(process.env.ALLOWED_ORIGINS) });

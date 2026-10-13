@@ -181,3 +181,19 @@ variable "enable_health_route" {
   type        = bool
   default     = false
 }
+
+variable "cors_allowed_origins" {
+  description = "Origins of the browser front end that may call this API (CORS), for example https://orders.example.com or http://localhost:8765. Empty (the default) adds nothing and the API behaves exactly as before. Each must be an exact origin: https, or http for localhost only, no path or trailing slash, never a wildcard. Browsers send a preflight (OPTIONS) request first, so each route also gets an unauthenticated OPTIONS method that answers it (a MOCK integration: no Lambda or DynamoDB call). The Allow-Origin header is echoed only for a listed origin. Errors that API Gateway itself produces (401, 403, 429 and others) carry the header for the FIRST origin only, because a gateway response cannot choose dynamically. CORS is not authentication: every route still needs a valid token."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for o in var.cors_allowed_origins : can(regex("^(https://[a-z0-9]([a-z0-9.-]*[a-z0-9])?|http://localhost)(:[0-9]{1,5})?$", o))])
+    error_message = "Each CORS origin must be https://host[:port], or http://localhost[:port]: exact, lower-case, no path, no trailing slash, no wildcard."
+  }
+
+  validation {
+    condition     = length(var.cors_allowed_origins) == length(distinct(var.cors_allowed_origins))
+    error_message = "cors_allowed_origins must not contain duplicates."
+  }
+}

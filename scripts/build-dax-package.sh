@@ -16,7 +16,7 @@ OUT="$ROOT/build/get-order-dax"
 
 rm -rf "$OUT"
 mkdir -p "$OUT"
-cp "$SRC/index.mjs" "$SRC/get-order.mjs" "$SRC/client.mjs" "$SRC/package.json" "$SRC/package-lock.json" "$OUT/"
+cp "$SRC/index.mjs" "$SRC/get-order.mjs" "$SRC/client.mjs" "$SRC/cors.mjs" "$SRC/package.json" "$SRC/package-lock.json" "$OUT/"
 
 if command -v npm >/dev/null 2>&1; then
   (cd "$OUT" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund)

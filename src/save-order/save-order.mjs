@@ -4,9 +4,11 @@
 const ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
 const ALLOWED_FIELDS = new Set(["orderId", "itemId", "quantity", "price"]);
 
-const response = (statusCode, body) => ({
+import { corsHeaders } from "./cors.mjs";
+
+const response = (statusCode, body, extraHeaders = {}) => ({
   statusCode,
-  headers: { "Content-Type": "application/json" },
+  headers: { "Content-Type": "application/json", ...extraHeaders },
   body: JSON.stringify(body),
 });
 
@@ -65,16 +67,18 @@ export function validateOrder(order) {
 }
 
 // putItem: async ({ TableName, Item, ConditionExpression }) => void
-export function createHandler({ putItem, tableName, now = () => new Date() }) {
+// allowedOrigins: origins of the browser front end that may read responses (empty: no CORS headers, the default).
+export function createHandler({ putItem, tableName, now = () => new Date(), allowedOrigins = [] }) {
   return async function handler(event, context) {
+    const cors = corsHeaders(event, allowedOrigins);
     const { order, error } = extractOrder(event);
     if (error) {
-      return response(400, { message: "Invalid order", errors: [error] });
+      return response(400, { message: "Invalid order", errors: [error] }, cors);
     }
 
     const errors = validateOrder(order);
     if (errors.length > 0) {
-      return response(400, { message: "Invalid order", errors });
+      return response(400, { message: "Invalid order", errors }, cors);
     }
 
     const item = { createdAt: now().toISOString() };
@@ -91,7 +95,7 @@ export function createHandler({ putItem, tableName, now = () => new Date() }) {
       });
     } catch (err) {
       if (err?.name === "ConditionalCheckFailedException") {
-        return response(409, { message: "Order item already exists" });
+        return response(409, { message: "Order item already exists" }, cors);
       }
       // Log the error type and request id only: never order contents or raw error messages.
       console.error(JSON.stringify({
@@ -99,9 +103,9 @@ export function createHandler({ putItem, tableName, now = () => new Date() }) {
         errorName: err?.name,
         requestId: context?.awsRequestId,
       }));
-      return response(500, { message: "Internal error" });
+      return response(500, { message: "Internal error" }, cors);
     }
 
-    return response(201, { orderId: item.orderId, itemId: item.itemId, createdAt: item.createdAt });
+    return response(201, { orderId: item.orderId, itemId: item.itemId, createdAt: item.createdAt }, cors);
   };
 }

@@ -3,6 +3,9 @@ data "aws_caller_identity" "current" {}
 locals {
   # Created by terraform/bootstrap; the pipeline can only create roles that carry it.
   app_role_boundary_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:policy/${var.app_role_boundary_name}"
+
+  # Browser front end (CORS): the Lambdas echo an allowed Origin, so they need the list. Nothing is added when it is empty.
+  cors_env = length(var.cors_allowed_origins) > 0 ? { ALLOWED_ORIGINS = join(",", var.cors_allowed_origins) } : {}
 }
 
 module "orders_table" {
@@ -30,9 +33,7 @@ module "save_order_function" {
   source_dir    = "${path.root}/../../../src/save-order"
   handler       = "index.handler"
 
-  environment_variables = {
-    TABLE_NAME = module.orders_table.table_name
-  }
+  environment_variables = merge({ TABLE_NAME = module.orders_table.table_name }, local.cors_env)
 
   # 512 MB chosen from a benchmark (scripts/benchmark, see README "Performance"): cold request 1.28 s to 0.51 s,
   # warm 70 ms to 11 ms versus 128 MB; cost stays inside the free tier.
@@ -122,6 +123,7 @@ module "get_order_function" {
   environment_variables = merge(
     { TABLE_NAME = module.orders_table.table_name },
     var.enable_dax ? { DAX_ENDPOINT = module.orders_dax[0].client_endpoint } : {},
+    local.cors_env,
   )
 
   # DAX is reached from inside the VPC.
@@ -187,6 +189,9 @@ module "orders_api" {
   stage_name  = var.environment
 
   cognito_user_pool_arns = local.api_user_pool_arns
+
+  # Browser front end (off unless origins are given).
+  cors_allowed_origins = var.cors_allowed_origins
 
   # GET /health for the Route 53 health check, only while the multi-region setup is on.
   enable_health_route = var.enable_multi_region

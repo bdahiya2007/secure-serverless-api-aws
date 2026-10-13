@@ -43,7 +43,7 @@ module "dr_save_order" {
   source_dir    = "${path.root}/../../../src/save-order"
   handler       = "index.handler"
 
-  environment_variables = { TABLE_NAME = module.orders_table.table_name }
+  environment_variables = merge({ TABLE_NAME = module.orders_table.table_name }, local.cors_env)
 
   memory_size          = 512
   enable_xray_tracing  = true
@@ -71,7 +71,7 @@ module "dr_get_order" {
   handler       = "index.handler"
   memory_size   = 512
 
-  environment_variables = { TABLE_NAME = module.orders_table.table_name }
+  environment_variables = merge({ TABLE_NAME = module.orders_table.table_name }, local.cors_env)
 
   policy_statements = [
     {
@@ -111,6 +111,8 @@ module "dr_api" {
 
   # The primary region's pool, plus the second region's pool when federated sign-in is on (see federated-signin.tf).
   cognito_user_pool_arns = local.api_user_pool_arns
+
+  cors_allowed_origins = var.cors_allowed_origins
 
   enable_health_route = true
 
