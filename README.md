@@ -434,3 +434,8 @@ What this project does not do, why, and what comes next. When something ships, i
 
 [three-tier-web-app-aws](https://github.com/bdahiya2007/three-tier-web-app-aws) is another project in this portfolio.
 It uses the same OIDC, approval-gated deployment approach with CloudFormation.
+
+## License
+
+All rights reserved. This repository is a portfolio project, published for viewing. No license is granted to copy, modify or redistribute
+the code. You are welcome to read it and to fork it on GitHub.
